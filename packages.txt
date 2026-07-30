@@ -49,3 +49,5 @@ warp-plus-bin
 wechat-bin
 wps-office-fonts
 
+codex-bin
+qoder-cli
