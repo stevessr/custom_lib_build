@@ -1,0 +1,95 @@
+# =============================================================================
+# Build AUR Repository — daily cron + manual trigger
+#
+# Builds every package listed in packages.txt inside an Arch Linux container,
+# generates a pacman-compatible repository database (repo-add), and deploys
+# the result to the gh-pages branch for GitHub Pages hosting.
+#
+# Usage:
+#   1. Fork this repo
+#   2. Edit packages.txt with your desired AUR packages
+#   3. Enable GitHub Pages (Settings → Pages → Deploy from branch gh-pages)
+#   4. Add to /etc/pacman.conf:
+#        [arch_lib]
+#        SigLevel = Optional TrustAll
+#        Server = https://<user>.github.io/arch_lib/repos/$arch
+# =============================================================================
+
+name: Build AUR Repository
+
+on:
+  # ── Daily at 00:00 UTC ──────────────────────────────────────────────
+  schedule:
+    - cron: '0 0 * * *'
+
+  # ── Manual trigger from Actions tab ─────────────────────────────────
+  workflow_dispatch:
+
+  # ── Trigger on push to main (for testing) ───────────────────────────
+  push:
+    branches:
+      - main
+
+# ── Permissions: need write access to push gh-pages branch ────────────
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --user root
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── Initialize Arch system ────────────────────────────────────
+      - name: Initialize system
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            base-devel \
+            git \
+            pacman-contrib \
+            sudo
+
+      # ── Create non-root build user ─────────────────────────────────
+      - name: Setup builder user
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          # Ensure builder can use pacman for dependency resolution
+          echo "builder ALL=(ALL) NOPASSWD: /usr/bin/pacman" >> /etc/sudoers
+          # Prepare cache and build dirs
+          mkdir -p /home/builder/.cache/aur-sources /tmp/aur-build
+          chown -R builder:builder /home/builder /tmp/aur-build
+
+      # ── Cache AUR source tarballs between runs ────────────────────
+      - name: Cache AUR sources
+        uses: actions/cache@v4
+        with:
+          path: /home/builder/.cache/aur-sources
+          key: aur-sources-${{ hashFiles('packages.txt') }}
+          restore-keys: |
+            aur-sources-
+
+      # ── Build all packages ─────────────────────────────────────────
+      - name: Build AUR packages and repository
+        env:
+          SRCDEST: /home/builder/.cache/aur-sources
+        run: |
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          sudo -u builder -H bash scripts/build-repo.sh
+
+      # ── Deploy to GitHub Pages ────────────────────────────────────
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./repos
+          keep_files: false
+          force_orphan: true
+          commit_message: "chore: update repo [skip ci]"
