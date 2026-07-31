@@ -324,11 +324,16 @@ jobs:
         run: |
           gh release delete latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
 
+      - name: Compute release name
+        id: release-name
+        run: |
+          echo "value=Arch Lib Repository $(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
       - name: Create new Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "Arch Lib Repository $(date -u +%Y-%m-%d)"
+          name: ${{ steps.release-name.outputs.value }}
           body: |
             ## arch_lib pacman repository
 
