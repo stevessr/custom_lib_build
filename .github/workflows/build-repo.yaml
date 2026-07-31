@@ -156,7 +156,21 @@ jobs:
       - name: Initialize Arch system
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel pacman-contrib
+          pacman -S --noconfirm --needed base-devel gnupg pacman-contrib
+
+      - name: Import signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+            # Extract fingerprint of the imported secret key
+            FPR=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+            echo "KEY_ID=$FPR" >> "$GITHUB_ENV"
+            echo "Signing key imported: $FPR"
+          else
+            echo "No GPG_PRIVATE_KEY secret — repository will be unsigned"
+          fi
 
       - name: Download last-versions artifact
         uses: actions/download-artifact@v4
@@ -240,13 +254,38 @@ jobs:
           fi
 
           rm -f arch_lib.db.tar.gz arch_lib.db arch_lib.files.tar.gz arch_lib.files
-          repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.*
+
+          if [ -n "$KEY_ID" ]; then
+            # Sign the database (GPGKEY env var used by repo-add)
+            echo "Signing repository database with $KEY_ID"
+            GPGKEY="$KEY_ID" repo-add --remove --new --sign arch_lib.db.tar.gz ./*.pkg.tar.*
+          else
+            repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.*
+          fi
+
           # Create real copies (not symlinks) — GitHub Release assets are
           # flat, and pacman requests both <repo>.db and <repo>.db.tar.gz
           rm -f arch_lib.db arch_lib.files
           cp arch_lib.db.tar.gz arch_lib.db
           cp arch_lib.files.tar.gz arch_lib.files
+
+          # Copy detached signatures for the .db copies too
+          if [ -n "$KEY_ID" ]; then
+            cp arch_lib.db.tar.gz.sig arch_lib.db.sig 2>/dev/null || true
+            cp arch_lib.files.tar.gz.sig arch_lib.files.sig 2>/dev/null || true
+          fi
           ls -lh
+
+      - name: Sign packages
+        if: env.KEY_ID != ''
+        run: |
+          cd repos/x86_64
+          for f in *.pkg.tar.*; do
+            [ -f "$f" ] || continue
+            echo "Signing: $f"
+            gpg --batch --yes --detach-sign --local-user "$KEY_ID" "$f"
+          done
+          echo "All packages signed"
 
       - name: Update last-versions.txt
         run: |
@@ -303,12 +342,21 @@ jobs:
             ```
 
             Then: `sudo pacman -Sy && sudo pacman -S <package>`
+
+            **Signing**: 若仓库已配置 GPG_PRIVATE_KEY，包和数据库均带 `.sig` 签名。
+            导入公钥后可改用 `SigLevel = Required DatabaseOptional` 验证。
           files: |
             last-versions.txt
+            arch_lib.pub.asc
             repos/x86_64/*.pkg.tar.zst
+            repos/x86_64/*.pkg.tar.zst.sig
             repos/x86_64/arch_lib.db.tar.gz
+            repos/x86_64/arch_lib.db.tar.gz.sig
             repos/x86_64/arch_lib.db
+            repos/x86_64/arch_lib.db.sig
             repos/x86_64/arch_lib.files.tar.gz
+            repos/x86_64/arch_lib.files.tar.gz.sig
             repos/x86_64/arch_lib.files
+            repos/x86_64/arch_lib.files.sig
           prerelease: false
           make_latest: true

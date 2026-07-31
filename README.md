@@ -145,6 +145,53 @@ strategy:
   max-parallel: 10
 ```
 
+## 签名与校验
+
+仓库支持 GPG 签名（可选但推荐）。
+
+### 仓库所有者：启用签名
+
+本地运行一次（生成无口令密钥对）：
+
+```bash
+bash scripts/generate-signing-key.sh
+```
+
+脚本输出：
+- `gpg-private-key.asc` → 内容添加到 GitHub **Settings → Secrets → Actions**，Secret 名 `GPG_PRIVATE_KEY`
+- `arch_lib.pub.asc` → 替换仓库根目录同名文件并提交
+
+> 确认 Secret 配置好后**删除本地私钥**：`rm gpg-private-key.asc`
+
+之后每次构建，publish 阶段会自动：
+- 对每个 `.pkg.tar.zst` 生成 `.sig` 签名
+- `repo-add --sign` 签名数据库（`.db.sig` / `.db.tar.gz.sig`）
+- 签名文件随 Release 一起上传
+
+### 用户：验证签名
+
+首次导入公钥（指纹见 Release 说明或自行查询）：
+
+```bash
+# 下载公钥并加入 pacman 密钥环
+curl -fsSL https://你的用户名.github.io/arch_lib/releases/download/latest/arch_lib.pub.asc | sudo pacman-key --add -
+# 本地信任（lsign-key 接受指纹或邮箱）
+sudo pacman-key --lsign-key arch-lib@localhost
+```
+
+然后在 `/etc/pacman.conf` 中启用严格签名：
+
+```ini
+[arch_lib]
+SigLevel = Required DatabaseOptional
+Server = https://你的用户名.github.io/arch_lib/releases/download/latest
+```
+
+- `Required`：包必须带有效签名
+- `DatabaseOptional`：数据库签名可选（`Required` 也可，但首次未签名时建议先 `DatabaseOptional`）
+
+未配置密钥的仓库（无 `.sig` 文件）请继续使用 `SigLevel = Optional TrustAll`。
+
 ## 注意事项
 
 - **构建时间**：`-git` 包首次构建需要时间，后续若上游无更新会自动跳过
