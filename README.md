@@ -151,22 +151,23 @@ strategy:
 
 ### 仓库所有者：启用签名
 
-本地运行一次（生成无口令密钥对）：
+**一键配置**（需要已登录的 `gh` CLI，且对仓库有 contents + secrets 权限）：
 
 ```bash
-bash scripts/generate-signing-key.sh
+bash scripts/generate-signing-key.sh [owner/repo]
 ```
 
-脚本输出：
-- `gpg-private-key.asc` → 内容添加到 GitHub **Settings → Secrets → Actions**，Secret 名 `GPG_PRIVATE_KEY`
-- `arch_lib.pub.asc` → 替换仓库根目录同名文件并提交
-
-> 确认 Secret 配置好后**删除本地私钥**：`rm gpg-private-key.asc`
+脚本自动完成三步：
+1. 生成无口令 GPG 密钥对（RSA 4096，仅用于仓库签名）
+2. `gh secret set GPG_PRIVATE_KEY` — 私钥写入 GitHub Secret
+3. 用生成的公钥替换仓库根目录 `arch_lib.pub.asc` 并自动提交推送
 
 之后每次构建，publish 阶段会自动：
 - 对每个 `.pkg.tar.zst` 生成 `.sig` 签名
 - `repo-add --sign` 签名数据库（`.db.sig` / `.db.tar.gz.sig`）
 - 签名文件随 Release 一起上传
+
+> 私钥只写入 GitHub Secret，本地不留副本；生成的是无口令密钥，仅限 CI 签名使用。
 
 ### 用户：验证签名
 

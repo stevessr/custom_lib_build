@@ -1,22 +1,32 @@
 #!/bin/bash
 #
-# generate-signing-key.sh — 一次性生成仓库签名密钥（本地运行）
+# generate-signing-key.sh — 一键生成仓库签名密钥并自动配置
+#
+# 功能：
+#   1. 生成无口令 GPG 密钥对（RSA 4096，仅用于仓库签名）
+#   2. 自动用 GitHub CLI 添加 Secret:  GPG_PRIVATE_KEY
+#   3. 用生成的公钥替换仓库根目录的 arch_lib.pub.asc 并自动提交推送
+#
+# 前提：
+#   - 已在仓库目录内（或 -R 指定仓库）
+#   - 已安装 gh 且已登录（gh auth login），对仓库有 contents + secrets 权限
 #
 # 用法：
-#   1. 在本仓库根目录运行:  bash scripts/generate-signing-key.sh
-#   2. 把 gpg-private-key.asc 内容添加到 GitHub Secret:  GPG_PRIVATE_KEY
-#   3. 把 arch_lib.pub.asc 提交到仓库（供用户导入）
-#   4. 删除本地 gpg-private-key.asc（私钥只应存在于 GitHub Secret）
+#   bash scripts/generate-signing-key.sh
+#   # 可选：指定仓库
+#   bash scripts/generate-signing-key.sh owner/repo
 #
-# 生成的是无口令密钥（CI 无法交互输入口令），仅用于仓库签名。
-# 不要用于其他任何用途。
+# 安全：生成的无口令私钥只会写入 GitHub Secret，本地不留存副本。
 #
 set -euo pipefail
 
+REPO="${1:-}"
 KEYEMAIL="arch-lib@localhost"
 KEYREAL="arch_lib Repository Signing Key"
+FPR=""
 
-echo "=== 生成 GPG 密钥（无口令，RSA 4096） ==="
+# ── 生成密钥 ────────────────────────────────────────────────────────
+echo "=== 1/3 生成 GPG 密钥（无口令，RSA 4096） ==="
 gpg --batch --gen-key <<EOF
 %no-protection
 Key-Type: RSA
@@ -28,21 +38,46 @@ Expire-Date: 0
 EOF
 
 FPR=$(gpg --list-secret-keys --with-colons "$KEYEMAIL" | awk -F: '/^fpr/{print $10; exit}')
-echo ""
-echo "=== 密钥指纹: ${FPR} ==="
+echo "密钥指纹: ${FPR}"
 
-# 私钥 → GitHub Secret（GPG_PRIVATE_KEY）
-gpg --batch --armor --export-secret-keys "$FPR" > gpg-private-key.asc
+# ── 自动添加 Secret ─────────────────────────────────────────────────
 echo ""
-echo "✔ 私钥已保存:  gpg-private-key.asc"
-echo "  下一步: 把该文件内容添加到 GitHub → Settings → Secrets → Actions"
-echo "  Secret 名称:  GPG_PRIVATE_KEY"
+echo "=== 2/3 添加 GitHub Secret: GPG_PRIVATE_KEY ==="
+if ! command -v gh &>/dev/null; then
+    echo "✗ 未安装 GitHub CLI (gh)。请手动添加 Secret:"
+    gpg --batch --armor --export-secret-keys "$FPR"
+    exit 1
+fi
 
-# 公钥 → 提交到仓库
+if ! gh auth status &>/dev/null 2>&1; then
+    echo "✗ 未登录 gh。请先运行: gh auth login"
+    exit 1
+fi
+
+GHARGS=()
+[ -n "$REPO" ] && GHARGS+=(-R "$REPO")
+
+# 从文件读入私钥写入 Secret
+gpg --batch --armor --export-secret-keys "$FPR" | gh secret set GPG_PRIVATE_KEY "${GHARGS[@]}" --body -
+echo "✔ Secret 已添加: GPG_PRIVATE_KEY"
+
+# ── 提交公钥 ────────────────────────────────────────────────────────
+echo ""
+echo "=== 3/3 提交公钥 arch_lib.pub.asc ==="
 gpg --batch --armor --export "$FPR" > arch_lib.pub.asc
-echo "✔ 公钥已保存:  arch_lib.pub.asc"
-echo "  下一步: 提交此文件到仓库根目录"
+
+git add arch_lib.pub.asc
+git commit -m "chore: add repository signing public key" 2>/dev/null \
+    && git push "${GHARGS[@]}" 2>/dev/null \
+    || echo "（提交/推送失败，请手动 git add/commit/push）"
+echo "✔ 公钥已提交"
+
+# 清理：本地不保留私钥副本（Secret 已安全存储）
+rm -f gpg-private-key.asc
 
 echo ""
-echo "⚠ 安全提醒: 确认 Secret 配置好后删除本地私钥文件"
-echo "  rm gpg-private-key.asc"
+echo "=== 完成 ==="
+echo "  Secret : GPG_PRIVATE_KEY（已配置）"
+echo "  公钥   : arch_lib.pub.asc（已提交）"
+echo ""
+echo "下次构建会自动签名包和数据库。用户侧配置见 README「签名与校验」。"
