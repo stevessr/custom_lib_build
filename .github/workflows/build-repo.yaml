@@ -38,7 +38,7 @@ jobs:
         id: gen-matrix
         run: |
           # Read packages, strip comments/blanks
-          packages=$(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' packages.txt | grep -v '^$' | jq -R . | jq -s .)
+          packages=$(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' packages.txt | grep -v '^$' | jq -R . | jq -s -c .)
           echo "matrix=${packages}" >> "$GITHUB_OUTPUT"
           echo "Packages: $packages"
 
