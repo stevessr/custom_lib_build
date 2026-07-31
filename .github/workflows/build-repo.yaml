@@ -204,27 +204,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Download the previous repo tarball to get cached -git packages
-          # that were skipped this round
+          # Download the previous release's packages to reuse those that
+          # were skipped this round (-git with unchanged commit).
           gh release download latest \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "x86_64.tar.zst" \
-            --dir ./prev-release || true
-          if [ -f ./prev-release/x86_64.tar.zst ]; then
-            tar -xf ./prev-release/x86_64.tar.zst -C ./prev-release || true
-            # Copy packages that don't already exist in our new build
-            for f in ./prev-release/repos/x86_64/*.pkg.tar.*; do
-              [ -f "$f" ] || continue
-              base=$(basename "$f" | tr ':' '_')
-              if [ ! -f "repos/x86_64/$base" ]; then
-                cp -v "$f" "repos/x86_64/$base"
-                echo "Reused from previous release: $base"
-              fi
-            done
-            # Copy previous versions file entries for skipped packages
-            if [ -f ./prev-release/last-versions.txt ]; then
-              cat ./prev-release/last-versions.txt >> retained-versions.txt
+            --pattern '*.pkg.tar.zst' \
+            --dir ./prev-pkgs || true
+          # Copy packages that don't already exist in our new build
+          for f in ./prev-pkgs/*.pkg.tar.*; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f" | tr ':' '_')
+            if [ ! -f "repos/x86_64/$base" ]; then
+              cp -v "$f" "repos/x86_64/$base"
+              echo "Reused from previous release: $base"
             fi
+          done
+          # Copy previous versions file entries for skipped packages
+          gh release download latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "last-versions.txt" \
+            --dir ./prev-release --clobber || true
+          if [ -f ./prev-release/last-versions.txt ]; then
+            cat ./prev-release/last-versions.txt >> retained-versions.txt
           fi
 
       - name: Create repository database
@@ -240,8 +241,11 @@ jobs:
 
           rm -f arch_lib.db.tar.gz arch_lib.db arch_lib.files.tar.gz arch_lib.files
           repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.*
-          ln -sf arch_lib.db.tar.gz arch_lib.db
-          ln -sf arch_lib.files.tar.gz arch_lib.files
+          # Create real copies (not symlinks) — GitHub Release assets are
+          # flat, and pacman requests both <repo>.db and <repo>.db.tar.gz
+          rm -f arch_lib.db arch_lib.files
+          cp arch_lib.db.tar.gz arch_lib.db
+          cp arch_lib.files.tar.gz arch_lib.files
           ls -lh
 
       - name: Update last-versions.txt
@@ -275,11 +279,6 @@ jobs:
           echo "Final versions:"
           cat last-versions.txt
 
-      - name: Create repo tarball
-        run: |
-          tar -cf x86_64.tar.zst -I zstd repos/x86_64 last-versions.txt
-          ls -lh x86_64.tar.zst
-
       - name: Delete previous latest release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -300,13 +299,16 @@ jobs:
             ```ini
             [arch_lib]
             SigLevel = Optional TrustAll
-            Server = ${{ github.server_url }}/${{ github.repository }}/releases/download/latest/$arch
+            Server = ${{ github.server_url }}/${{ github.repository }}/releases/download/latest
             ```
 
             Then: `sudo pacman -Sy && sudo pacman -S <package>`
           files: |
-            x86_64.tar.zst
             last-versions.txt
+            repos/x86_64/*.pkg.tar.zst
             repos/x86_64/arch_lib.db.tar.gz
+            repos/x86_64/arch_lib.db
+            repos/x86_64/arch_lib.files.tar.gz
+            repos/x86_64/arch_lib.files
           prerelease: false
           make_latest: true

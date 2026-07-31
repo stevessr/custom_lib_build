@@ -48,7 +48,7 @@ hyprland-git
 ```ini
 [arch_lib]
 SigLevel = Optional TrustAll
-Server = https://你的用户名.github.io/arch_lib/releases/download/latest/$arch
+Server = https://你的用户名.github.io/arch_lib/releases/download/latest
 ```
 
 > **注意**：将 `你的用户名` 替换为你的 GitHub 用户名，`arch_lib` 替换为你的仓库名。
@@ -107,19 +107,19 @@ echo "自定义构建准备..."
 
 ## Release 产物结构
 
-每次构建完成后，`latest` Release 包含：
+每次构建完成后，`latest` Release 包含（每个包独立上传，避免 >2GiB 单文件限制）：
 
 ```
 latest/
-├── x86_64.tar.zst              # x86_64 仓库目录完整打包
 ├── last-versions.txt           # 版本追踪文件（下次运行用于 -git 跳过判断）
-└── repos/x86_64/
-    ├── arch_lib.db.tar.gz     # pacman 仓库数据库
-    ├── arch_lib.db             # 数据库符号链接
-    └── *.pkg.tar.zst          # 构建好的包文件
+├── arch_lib.db.tar.gz          # pacman 仓库数据库
+├── arch_lib.db                 # 数据库（pacman 请求的另一个名字）
+├── arch_lib.files.tar.gz
+├── arch_lib.files
+└── *.pkg.tar.zst              # 构建好的包文件（扁平上传）
 ```
 
-pacman 通过 `Server = .../releases/download/latest/$arch` 访问，GitHub Release 自动提供 `x86_64` 路径下的文件。
+pacman 通过 `Server = .../releases/download/latest` 访问，GitHub Release 会按数据库中的文件名提供每个包。
 
 ## 自定义
 
