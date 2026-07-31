@@ -1,0 +1,32 @@
+# =============================================================================
+# Manual build — trigger a single package build on demand
+#
+# Usage: Actions tab → "Manual Build Package" → Run workflow → enter package
+# =============================================================================
+
+name: Manual Build Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'AUR 包名（也是 Release tag）'
+        required: true
+        type: string
+      signing:
+        description: '是否签名（需要配置 GPG_PRIVATE_KEY）'
+        required: false
+        default: 'true'
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-package.yaml
+    with:
+      package: ${{ inputs.package }}
+      signing: ${{ inputs.signing && 'true' || 'false' }}
+    secrets:
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}

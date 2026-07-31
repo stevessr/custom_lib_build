@@ -13,15 +13,18 @@
 ## 工作原理
 
 ```
-packages.txt ──▶ prepare ──▶ build (matrix)
+packages.txt ──▶ prepare ──▶ build (matrix, 调 build-package.yaml)
                               ├── flutter-bin ──▶ Release flutter-bin
                               ├── yay          ──▶ Release yay
                               └── ...          ──▶ Release ...
+                                              │
+                                              ▼
+                              publish ──▶ repo-add ──▶ Release latest (汇总数据库)
 ```
 
 1. **prepare** — 解析 `packages.txt` 生成 matrix
-2. **build** — 每个包并行构建；`-git` 包先检查上游 commit hash，未变则跳过
-3. **发布** — 每个构建 job 直接将产物上传到自己的 Release（tag = 包名，覆盖更新）
+2. **build** — 每个包并行构建（可复用工作流 `build-package.yaml`），直接上传到自己的 Release（tag = 包名，覆盖更新）；`-git` 包先检查上游 commit hash，未变则跳过
+3. **publish** — 从每个包的 Release 下载产物，`repo-add` 生成 pacman 仓库数据库，上传到 `latest` Release（汇总仓库）
 
 ## 快速开始
 
@@ -43,15 +46,26 @@ hyprland-git
 
 ### 3. 安装包
 
-每个包在 Releases 页面有独立 Release（tag = 包名），可直接下载安装：
+**方式一：作为 pacman 仓库（推荐）**
 
-```bash
-# 查看包列表 → 点击 Releases → 选择对应 tag
-# 下载 .pkg.tar.zst 后用 pacman -U 安装
-sudo pacman -U /path/to/package.pkg.tar.zst
+编辑 `/etc/pacman.conf`，添加汇总仓库：
+
+```ini
+[arch_lib]
+SigLevel = Optional TrustAll
+Server = https://你的用户名.github.io/arch_lib/releases/download/latest
 ```
 
-或使用 `gh` CLI 直接下载并安装：
+然后直接安装：
+
+```bash
+sudo pacman -Sy
+sudo pacman -S 包名
+```
+
+**方式二：单独下载某个包**
+
+每个包在 Releases 页面有独立 Release（tag = 包名）：
 
 ```bash
 gh release download yay --repo 你的用户名/arch_lib --pattern '*.pkg.tar.zst'
@@ -107,7 +121,9 @@ sudo pacman -U 包名-版本-架构.pkg.tar.zst
 ```
 arch_lib/
 ├── .github/workflows/
-│   └── build-repo.yaml        # GitHub Actions 工作流（matrix + per-package release）
+│   ├── build-repo.yaml        # 调度器：prepare + matrix + publish 汇总
+│   ├── build-package.yaml     # 可复用：单包构建 + 上传到包名 Release
+│   └── manual-build.yaml      # 手动触发单包构建
 ├── scripts/
 │   ├── build-package.sh      # 单包构建脚本（含 -git 跳过逻辑）
 │   ├── generate-signing-key.sh # 一键生成签名密钥
@@ -120,17 +136,24 @@ arch_lib/
 
 ## Release 产物结构
 
-每个包独立 Release，tag = 包名：
+**汇总仓库**（tag = `latest`）— pacman 直接使用：
 
 ```
-latest (tag: yay/)
-├── yay-12.4.2-1-x86_64.pkg.tar.zst
-├── yay-12.4.2-1-x86_64.pkg.tar.zst.sig  # （如配置签名）
-└── version.txt                            # 版本号（用于 -git 跳过检查）
+latest/
+├── arch_lib.db.tar.gz           # pacman 仓库数据库
+├── arch_lib.db
+├── arch_lib.files.tar.gz
+├── arch_lib.files
+└── *.pkg.tar.zst                # 所有包的产物
+```
 
-latest (tag: flutter-bin/)
-├── flutter-bin-3.35.1-1-x86_64.pkg.tar.zst
-└── version.txt
+**单包 Release**（tag = 包名）— 单独分发：
+
+```
+yay/
+├── yay-12.4.2-1-x86_64.pkg.tar.zst
+├── yay-12.4.2-1-x86_64.pkg.tar.zst.sig  # 如配置签名
+└── version.txt                  # 版本号（用于 -git 跳过检查）
 ```
 
 ## 自定义

@@ -1,20 +1,18 @@
 # =============================================================================
-# Build AUR Repository — daily cron + manual trigger
+# Build AUR Repository — daily cron + manual trigger (orchestrator)
 #
 # Strategy:
 #   1. prepare  — read packages.txt, generate matrix
-#   2. build    — matrix: one job per package; each job builds its package
-#                 and uploads it DIRECTLY to its own GitHub Release
-#                 (tag = package name, overwritten on every run)
+#   2. build    — matrix: one job per package → calls build-package.yaml,
+#                 which builds the package and uploads it DIRECTLY to its
+#                 own GitHub Release (tag = package name, overwritten)
+#   3. publish  — collect every package release's artifacts, run repo-add
+#                 to create the pacman repo database, and upload the
+#                 combined repo to the `latest` Release (overwritten)
 #
-# Each package release contains:
-#   <pkg>.pkg.tar.zst        — built package
-#   <pkg>.pkg.tar.zst.sig    — GPG signature (if signing key configured)
-#   version.txt              — last built version (used for -git skip check)
-#
-# -git packages: build-package.sh compares the upstream commit hash
-# (git ls-remote) against version.txt from the previous release; if
-# unchanged, the build is skipped and the old release is left in place.
+# Users can either:
+#   - add the `latest` Release as a pacman repository (Server=.../latest)
+#   - download individual packages from their own package-name Release
 # =============================================================================
 
 name: Build AUR Repository
@@ -46,85 +44,36 @@ jobs:
           echo "matrix=${packages}" >> "$GITHUB_OUTPUT"
           echo "Packages: $packages"
 
-  # ── Build: one job per package, direct release upload ──────────────
+  # ── Build: one job per package (reusable workflow) ─────────────────
   build:
     needs: prepare
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:latest
-      options: --user root
     strategy:
       matrix:
         pkg: ${{ fromJson(needs.prepare.outputs.matrix) }}
       fail-fast: false
       max-parallel: 10
+    uses: ./.github/workflows/build-package.yaml
+    with:
+      package: ${{ matrix.pkg }}
+    secrets:
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
 
+  # ── Publish: collect all packages, build pacman repo database ──────
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --user root
     steps:
       - uses: actions/checkout@v4
 
       - name: Initialize Arch system
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel git libglvnd pacman-contrib sudo
+          pacman -S --noconfirm --needed base-devel gnupg pacman-contrib
 
-      - name: Setup builder user
-        run: |
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          mkdir -p /home/builder/.cache/aur-sources /tmp/aur-build
-          chown -R builder:builder /home/builder /tmp/aur-build
-
-      # ── Version tracking: fetch previous version from own release ──
-      - name: Fetch previous version from release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release download "${{ matrix.pkg }}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "version.txt" \
-            --dir . --clobber 2>/dev/null || true
-          if [ -f version.txt ]; then
-            ver=$(cat version.txt)
-            echo "${{ matrix.pkg }}=${ver}" > last-versions.txt
-            echo "Previous version: $ver"
-          else
-            touch last-versions.txt
-            echo "No previous version — will build"
-          fi
-
-      - name: Cache AUR sources
-        uses: actions/cache@v4
-        with:
-          path: /home/builder/.cache/aur-sources
-          key: aur-sources-${{ matrix.pkg }}-${{ github.run_id }}
-          restore-keys: |
-            aur-sources-${{ matrix.pkg }}-
-
-      # ── Build (skips -git packages with unchanged commit) ──────────
-      - name: Build package ${{ matrix.pkg }}
-        run: |
-          chown -R builder:builder "$GITHUB_WORKSPACE"
-          cd "$GITHUB_WORKSPACE"
-          # -E: keep env (SRCDEST, GITHUB_WORKSPACE), -H: set HOME=/home/builder
-          sudo -EHu builder bash scripts/build-package.sh "${{ matrix.pkg }}"
-
-      # ── Read build result ──────────────────────────────────────────
-      - name: Check build result
-        id: result
-        run: |
-          outfile="$GITHUB_WORKSPACE/output-${{ matrix.pkg }}.env"
-          if [ -f "$outfile" ]; then
-            source "$outfile"
-            echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
-            echo "skipped=${skipped:-false}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=unknown" >> "$GITHUB_OUTPUT"
-            echo "skipped=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # ── Sign package (if signing key configured) ───────────────────
-      - name: Sign package
-        if: steps.result.outputs.skipped != 'true'
+      - name: Import signing key
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
@@ -132,44 +81,145 @@ jobs:
             printf '%s\n' "$GPG_PRIVATE_KEY" > /tmp/gpg-key.asc
             gpg --batch --import /tmp/gpg-key.asc
             rm -f /tmp/gpg-key.asc
-            for f in repos/x86_64/*.pkg.tar.*; do
-              [ -f "$f" ] || continue
-              echo "Signing: $f"
-              gpg --batch --yes --detach-sign "$f"
-            done
+            FPR=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+            echo "KEY_ID=$FPR" >> "$GITHUB_ENV"
+            echo "Signing key imported: $FPR"
           else
-            echo "No GPG_PRIVATE_KEY secret — package unsigned"
+            echo "No GPG_PRIVATE_KEY secret — repo unsigned"
           fi
 
-      # ── Upload directly to this package's release ──────────────────
-      - name: Publish to release ${{ matrix.pkg }}
-        if: steps.result.outputs.skipped != 'true'
+      # ── Download every package from its own release ────────────────
+      - name: Download packages from per-package releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd "$GITHUB_WORKSPACE"
-          # Write version.txt asset for next run's -git skip check
-          echo "${{ steps.result.outputs.version }}" > version.txt
-          cp version.txt repos/x86_64/ 2>/dev/null || true
+          mkdir -p repos/x86_64
 
-          echo "Packages to upload:"
+          # Read package list (same parsing as prepare)
+          mapfile -t pkgs < <(
+            sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' packages.txt \
+              | grep -v '^$'
+          )
+
+          for pkg in "${pkgs[@]}"; do
+            echo "--- Downloading: $pkg ---"
+            # Download only package files (skip .sig and version.txt here;
+            # .sig files are re-generated below if signing is configured)
+            if gh release download "$pkg" \
+                --repo "$GITHUB_REPOSITORY" \
+                --pattern '*.pkg.tar.zst' \
+                --dir "repos/x86_64" --clobber 2>/dev/null; then
+              echo "  ✓ $pkg package downloaded"
+            else
+              echo "  ⚠ $pkg has no release yet (build skipped/failed?)"
+            fi
+          done
+
+          echo "--- Collected packages ---"
           ls -lh repos/x86_64/
 
-          # Delete previous release (overwrite semantics)
-          gh release delete "${{ matrix.pkg }}" \
-            --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+      # ── Sanitize epoch colons & sign ───────────────────────────────
+      - name: Sanitize and sign packages
+        run: |
+          cd repos/x86_64
 
-          # Build the file list dynamically (globs that match nothing
-          # would be passed as literal args and error out)
+          # Epoch colons (e.g. kiro-ide-2:1.0.242) break GitHub uploads
+          for f in *:*.pkg.tar.zst; do
+            [ -f "$f" ] || continue
+            dest=$(basename "$f" | tr ':' '_')
+            mv -v "$f" "$dest"
+          done
+
+          # Sign each package if key configured
+          if [ -n "${KEY_ID:-}" ]; then
+            for f in *.pkg.tar.zst; do
+              [ -f "$f" ] || continue
+              echo "Signing: $f"
+              gpg --batch --yes --detach-sign --local-user "$KEY_ID" "$f"
+            done
+          fi
+
+      # ── Create repository database ─────────────────────────────────
+      - name: Create repository database
+        run: |
+          cd repos/x86_64
+
+          PKG_COUNT=$(ls -1 *.pkg.tar.* 2>/dev/null | wc -l || true)
+          echo "Packages in repo: $PKG_COUNT"
+          if [ "$PKG_COUNT" -eq 0 ]; then
+            echo "No packages — aborting"
+            exit 1
+          fi
+
+          rm -f arch_lib.db.tar.gz arch_lib.db arch_lib.files.tar.gz arch_lib.files
+
+          if [ -n "${KEY_ID:-}" ]; then
+            echo "Signing repository database with $KEY_ID"
+            GPGKEY="$KEY_ID" repo-add --remove --new --sign arch_lib.db.tar.gz ./*.pkg.tar.*
+          else
+            repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.*
+          fi
+
+          # Real copies (not symlinks) — GitHub Release assets are flat,
+          # pacman requests both <repo>.db and <repo>.db.tar.gz
+          rm -f arch_lib.db arch_lib.files
+          cp arch_lib.db.tar.gz arch_lib.db
+          cp arch_lib.files.tar.gz arch_lib.files
+
+          if [ -n "${KEY_ID:-}" ]; then
+            cp arch_lib.db.tar.gz.sig arch_lib.db.sig 2>/dev/null || true
+            cp arch_lib.files.tar.gz.sig arch_lib.files.sig 2>/dev/null || true
+          fi
+          ls -lh
+
+      # ── Upload combined repo to `latest` Release ───────────────────
+      - name: Delete previous latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+
+      - name: Compute release name
+        id: release-name
+        run: |
+          echo "value=Arch Lib Repository $(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Create new Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Build the file list dynamically
           FILES=()
-          for f in repos/x86_64/*.pkg.tar.* repos/x86_64/*.sig repos/x86_64/version.txt; do
+          for f in repos/x86_64/*.pkg.tar.zst \
+                   repos/x86_64/*.pkg.tar.zst.sig \
+                   repos/x86_64/arch_lib.db.tar.gz repos/x86_64/arch_lib.db \
+                   repos/x86_64/arch_lib.db.tar.gz.sig repos/x86_64/arch_lib.db.sig \
+                   repos/x86_64/arch_lib.files.tar.gz repos/x86_64/arch_lib.files \
+                   repos/x86_64/arch_lib.files.tar.gz.sig repos/x86_64/arch_lib.files.sig; do
             [ -f "$f" ] && FILES+=("$f")
           done
 
-          # Create new release with all artifacts
-          # (|| true: if delete+cleanup-tag failed, tag may still exist)
-          gh release create "${{ matrix.pkg }}" \
+          # Body for the release
+          cat > release-body.md <<EOF
+          ## arch_lib pacman repository
+
+          Daily build of AUR packages.
+
+          **Usage** — add to \`/etc/pacman.conf\`:
+          \`\`\`ini
+          [arch_lib]
+          SigLevel = Optional TrustAll
+          Server = $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/latest
+          \`\`\`
+
+          Then: \`sudo pacman -Sy && sudo pacman -S <package>\`
+
+          **Signing**: 若已配置 GPG_PRIVATE_KEY，包和数据库均带 \`.sig\` 签名。
+          导入公钥后可改用 \`SigLevel = Required DatabaseOptional\` 验证。
+          EOF
+
+          gh release create latest \
             --repo "$GITHUB_REPOSITORY" \
-            --title "${{ matrix.pkg }} ${{ steps.result.outputs.version }}" \
-            --notes "Auto-built from AUR on $(date -u +%Y-%m-%d)" \
+            --title "${{ steps.release-name.outputs.value }}" \
+            --notes-file release-body.md \
             "${FILES[@]}" || true

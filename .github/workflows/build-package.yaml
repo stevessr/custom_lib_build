@@ -1,0 +1,162 @@
+# =============================================================================
+# Reusable: build a single AUR package and publish to its own Release
+#
+# Called by:
+#   - build-repo.yaml   (matrix, daily cron)
+#   - manual-build.yaml (workflow_dispatch)
+#
+# Inputs:
+#   package  — AUR package name (also used as the GitHub Release tag)
+#   signing  — 'true' to sign packages with the GPG_PRIVATE_KEY secret
+#
+# Release tag = package name. Each run overwrites the previous release.
+# Release assets:
+#   <pkg>.pkg.tar.zst        — built package
+#   <pkg>.pkg.tar.zst.sig    — GPG signature (if signing enabled)
+#   version.txt              — last built version (used for -git skip check)
+#
+# -git packages: upstream commit hash (git ls-remote) is compared against
+# version.txt from the previous release; unchanged → skip build, old
+# release is left in place.
+# =============================================================================
+
+name: Build Package
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        required: true
+        type: string
+      signing:
+        required: false
+        default: 'true'
+        type: string
+    secrets:
+      GPG_PRIVATE_KEY:
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --user root
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize Arch system
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel git libglvnd pacman-contrib sudo
+
+      - name: Setup builder user
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          mkdir -p /home/builder/.cache/aur-sources /tmp/aur-build
+          chown -R builder:builder /home/builder /tmp/aur-build
+
+      # ── Version tracking: fetch previous version from own release ──
+      - name: Fetch previous version from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ inputs.package }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "version.txt" \
+            --dir . --clobber 2>/dev/null || true
+          if [ -f version.txt ]; then
+            ver=$(cat version.txt)
+            echo "${{ inputs.package }}=${ver}" > last-versions.txt
+            echo "Previous version: $ver"
+          else
+            touch last-versions.txt
+            echo "No previous version — will build"
+          fi
+
+      - name: Cache AUR sources
+        uses: actions/cache@v4
+        with:
+          path: /home/builder/.cache/aur-sources
+          key: aur-sources-${{ inputs.package }}-${{ github.run_id }}
+          restore-keys: |
+            aur-sources-${{ inputs.package }}-
+
+      # ── Build (skips -git packages with unchanged commit) ──────────
+      - name: Build package ${{ inputs.package }}
+        run: |
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          # -E: keep env (SRCDEST, GITHUB_WORKSPACE), -H: set HOME=/home/builder
+          sudo -EHu builder bash scripts/build-package.sh "${{ inputs.package }}"
+
+      # ── Read build result ──────────────────────────────────────────
+      - name: Check build result
+        id: result
+        run: |
+          outfile="$GITHUB_WORKSPACE/output-${{ inputs.package }}.env"
+          if [ -f "$outfile" ]; then
+            source "$outfile"
+            echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
+            echo "skipped=${skipped:-false}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=unknown" >> "$GITHUB_OUTPUT"
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Sign package (if signing key configured) ───────────────────
+      - name: Sign package
+        if: steps.result.outputs.skipped != 'true' && inputs.signing == 'true'
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            printf '%s\n' "$GPG_PRIVATE_KEY" > /tmp/gpg-key.asc
+            gpg --batch --import /tmp/gpg-key.asc
+            rm -f /tmp/gpg-key.asc
+            for f in repos/x86_64/*.pkg.tar.*; do
+              [ -f "$f" ] || continue
+              echo "Signing: $f"
+              gpg --batch --yes --detach-sign "$f"
+            done
+          else
+            echo "No GPG_PRIVATE_KEY secret — package unsigned"
+          fi
+
+      # ── Upload directly to this package's release ──────────────────
+      - name: Publish to release ${{ inputs.package }}
+        if: steps.result.outputs.skipped != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          # Write version.txt asset for next run's -git skip check
+          echo "${{ steps.result.outputs.version }}" > version.txt
+          cp version.txt repos/x86_64/ 2>/dev/null || true
+
+          echo "Packages to upload:"
+          ls -lh repos/x86_64/
+
+          # Delete previous release (overwrite semantics)
+          gh release delete "${{ inputs.package }}" \
+            --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+
+          # Build the file list dynamically (globs that match nothing
+          # would be passed as literal args and error out)
+          FILES=()
+          for f in repos/x86_64/*.pkg.tar.* repos/x86_64/*.sig repos/x86_64/version.txt; do
+            [ -f "$f" ] && FILES+=("$f")
+          done
+
+          # Create new release with all artifacts
+          # (|| true: if delete+cleanup-tag failed, tag may still exist)
+          gh release create "${{ inputs.package }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "${{ inputs.package }} ${{ steps.result.outputs.version }}" \
+            --notes "Auto-built from AUR on $(date -u +%Y-%m-%d)" \
+            "${FILES[@]}" || true
