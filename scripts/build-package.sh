@@ -23,7 +23,10 @@
 set -euo pipefail
 
 PKG="$1"
-PKG_OUTPUT="$2"
+# Output file lives INSIDE the container's workspace ($GITHUB_WORKSPACE),
+# never the host path (${{ github.workspace }} does not exist in the container).
+PKG_OUTPUT="${2:-$GITHUB_WORKSPACE/output-$PKG.env}"
+mkdir -p "$(dirname "$PKG_OUTPUT")"
 REPO_DIR="${REPO_DIR:-$GITHUB_WORKSPACE/repos/x86_64}"
 BUILD_DIR="/tmp/aur-build"
 LAST_VERSIONS_FILE="${LAST_VERSIONS_FILE:-$GITHUB_WORKSPACE/last-versions.txt}"

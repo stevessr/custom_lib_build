@@ -114,8 +114,11 @@ jobs:
         run: |
           chown -R builder:builder "$GITHUB_WORKSPACE"
           cd "$GITHUB_WORKSPACE"
-          sudo -Eu builder bash scripts/build-package.sh \
-            "${{ matrix.pkg }}" "${{ github.workspace }}/output-${{ matrix.pkg }}.env"
+          # -E: keep env (SRCDEST, GITHUB_WORKSPACE), -H: set HOME=/home/builder
+          #   (root's HOME=/github/home is not writable by builder — breaks
+          #    Go/Rust build caches)
+          sudo -EHu builder bash scripts/build-package.sh \
+            "${{ matrix.pkg }}" "$GITHUB_WORKSPACE/output-${{ matrix.pkg }}.env"
 
       - name: Collect built package
         run: |
@@ -123,7 +126,7 @@ jobs:
           # Copy any .pkg.tar.* from the repo dir
           cp -v repos/x86_64/*.pkg.tar.* artifact/ 2>/dev/null || true
           # Read version/skip info written by build-package.sh
-          outfile="${{ github.workspace }}/output-${{ matrix.pkg }}.env"
+          outfile="$GITHUB_WORKSPACE/output-${{ matrix.pkg }}.env"
           if [ -f "$outfile" ]; then
             source "$outfile"
             echo "${{ matrix.pkg }}=${version:-unknown}" > artifact/versions.txt
