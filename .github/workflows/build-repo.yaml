@@ -198,6 +198,8 @@ jobs:
                    repos/x86_64/arch_lib.files.tar.gz.sig repos/x86_64/arch_lib.files.sig; do
             [ -f "$f" ] && FILES+=("$f")
           done
+          # 公钥随汇总仓库发布
+          FILES+=("$GITHUB_WORKSPACE/arch_lib.pub.asc")
 
           # Body for the release
           cat > release-body.md <<EOF

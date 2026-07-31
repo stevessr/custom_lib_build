@@ -75,9 +75,28 @@ echo "✔ 公钥已提交"
 # 清理：本地不保留私钥副本（Secret 已安全存储）
 rm -f gpg-private-key.asc
 
+# ── 导入 pacman 密钥环 ─────────────────────────────────────────────
+echo ""
+echo "=== 4/4 导入 pacman 密钥环 ==="
+if command -v pacman-key &>/dev/null; then
+    # pacman 用独立密钥环 /etc/pacman.d/gnupg，与用户级 gpg 钥匙圈无关。
+    # 自生成密钥从未上传 keyserver，pacman 远程查找必然失败，
+    # 必须在本地导入并本地签名信任。
+    sudo pacman-key --add arch_lib.pub.asc
+    yes | sudo pacman-key --lsign-key "$FPR"
+    echo "✔ 公钥已导入 pacman 密钥环并本地信任"
+    echo "  密钥指纹: ${FPR}"
+    echo "  /etc/pacman.conf 可配置 SigLevel = Required DatabaseOptional"
+else
+    echo "⚠ 未检测到 pacman-key（非 Arch 系统？）。用户需在 Arch 上手动导入:"
+    echo "    sudo pacman-key --add arch_lib.pub.asc"
+    echo "    sudo pacman-key --lsign-key ${FPR}"
+fi
+
 echo ""
 echo "=== 完成 ==="
 echo "  Secret : GPG_PRIVATE_KEY（已配置）"
 echo "  公钥   : arch_lib.pub.asc（已提交）"
+echo "  pacman : 已导入本地密钥环并信任"
 echo ""
-echo "下次构建会自动签名包和数据库。用户侧配置见 README「签名与校验」。"
+echo "下次构建会自动签名包和数据库。"

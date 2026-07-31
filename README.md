@@ -98,19 +98,45 @@ bash scripts/generate-signing-key.sh [owner/repo]
 1. 生成无口令 GPG 密钥对（RSA 4096）
 2. `gh secret set GPG_PRIVATE_KEY` — 私钥写入 GitHub Secret
 3. `gh commit/push` — 公钥 `arch_lib.pub.asc` 提交到仓库
+4. `pacman-key --add + --lsign-key` — **同时导入本地 pacman 密钥环**（`/etc/pacman.d/gnupg`）并信任
 
 之后每次构建会自动对包文件生成 `.sig` 签名。
 
+> **注意**：pacman 使用独立密钥环 `/etc/pacman.d/gnupg`，与用户级 gpg 钥匙圈无关；自生成密钥从未上传 keyserver，pacman 远程查找必然失败，必须在本地导入并本地签名信任。
+
 ### 用户：验证签名
+
+**一键导入**（推荐，自动从 Release 下载公钥并导入 pacman 密钥环）：
+
+```bash
+# 在任意目录执行（自动从 Release 下载公钥）
+bash <(curl -fsSL https://raw.githubusercontent.com/你的用户名/arch_lib/main/scripts/import-signing-key.sh) 你的用户名/arch_lib
+```
+
+**手动流程**（等价）：
 
 ```bash
 # 下载公钥
-curl -fsSL https://github.com/你的用户名/arch_lib/releases/download/包名/arch_lib.pub.asc | sudo pacman-key --add -
+curl -fsSL https://github.com/你的用户名/arch_lib/releases/download/latest/arch_lib.pub.asc | sudo pacman-key --add -
+# 本地签名信任
 sudo pacman-key --lsign-key arch-lib@localhost
 
 # 安装时验证
 sudo pacman -U 包名-版本-架构.pkg.tar.zst
 ```
+
+导入后在 `/etc/pacman.conf` 中可启用严格签名：
+
+```ini
+[arch_lib]
+SigLevel = Required DatabaseOptional
+Server = https://你的用户名.github.io/arch_lib/releases/download/latest
+```
+
+- `Required`：包必须带有效签名
+- `DatabaseOptional`：数据库签名可选（首次可先用 `DatabaseOptional`，后续改为 `Required`）
+
+未配置密钥的仓库（无 `.sig` 文件）请继续使用 `SigLevel = Optional TrustAll`。
 
 ## 手动触发构建
 
@@ -126,7 +152,8 @@ arch_lib/
 │   └── manual-build.yaml      # 手动触发单包构建
 ├── scripts/
 │   ├── build-package.sh      # 单包构建脚本（含 -git 跳过逻辑）
-│   ├── generate-signing-key.sh # 一键生成签名密钥
+│   ├── generate-signing-key.sh # 一键生成签名密钥（自动导入 pacman 密钥环）
+│   ├── import-signing-key.sh # 用户侧一键导入公钥到 pacman 密钥环
 │   └── pre-build/            # 包级预构建钩子（可选）
 │       └── qoder-cli.sh      # 示例：修复安装脚本行为异常的包
 ├── packages.txt              # 要构建的 AUR 包列表

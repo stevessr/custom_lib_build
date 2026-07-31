@@ -152,6 +152,8 @@ jobs:
           for f in repos/x86_64/*.pkg.tar.* repos/x86_64/*.sig repos/x86_64/version.txt; do
             [ -f "$f" ] && FILES+=("$f")
           done
+          # 公钥随包发布，用户无需从源码下载
+          FILES+=("$GITHUB_WORKSPACE/arch_lib.pub.asc")
 
           # Create new release with all artifacts
           # (|| true: if delete+cleanup-tag failed, tag may still exist)
