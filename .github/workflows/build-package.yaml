@@ -57,7 +57,7 @@ jobs:
       - name: Setup builder user
         run: |
           useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          echo "builder ALL=(ALL) NOPASSWD: SETENV: ALL" >> /etc/sudoers
           mkdir -p /home/builder/.cache/aur-sources /tmp/aur-build
           chown -R builder:builder /home/builder /tmp/aur-build
 
@@ -89,10 +89,13 @@ jobs:
 
       # ── Build (skips -git packages with unchanged commit) ──────────
       - name: Build package ${{ inputs.package }}
+        env:
+          REPO_DIR: "${{ github.workspace }}/repos/x86_64"
+          LAST_VERSIONS_FILE: "${{ github.workspace }}/last-versions.txt"
         run: |
           chown -R builder:builder "$GITHUB_WORKSPACE"
           cd "$GITHUB_WORKSPACE"
-          # -E: keep env (SRCDEST, GITHUB_WORKSPACE), -H: set HOME=/home/builder
+          # -E: keep env (SRCDEST, REPO_DIR, LAST_VERSIONS_FILE), -H: HOME=/home/builder
           sudo -EHu builder bash scripts/build-package.sh "${{ inputs.package }}"
 
       # ── Read build result ──────────────────────────────────────────
@@ -142,10 +145,6 @@ jobs:
           echo "Packages to upload:"
           ls -lh repos/x86_64/
 
-          # Delete previous release (overwrite semantics)
-          gh release delete "${{ inputs.package }}" \
-            --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
-
           # Build the file list dynamically (globs that match nothing
           # would be passed as literal args and error out)
           FILES=()
@@ -155,10 +154,20 @@ jobs:
           # 公钥随包发布，用户无需从源码下载
           FILES+=("$GITHUB_WORKSPACE/arch_lib.pub.asc")
 
-          # Create new release with all artifacts
-          # (|| true: if delete+cleanup-tag failed, tag may still exist)
-          gh release create "${{ inputs.package }}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "${{ inputs.package }} ${{ steps.result.outputs.version }}" \
-            --notes "Auto-built from AUR on $(date -u +%Y-%m-%d)" \
-            "${FILES[@]}" || true
+          echo "Uploading ${#FILES[@]} files to release ${{ inputs.package }}..."
+
+          # Create release if it doesn't exist yet
+          if ! gh release view "${{ inputs.package }}" --repo "$GITHUB_REPOSITORY" 2>/dev/null; then
+            echo "Creating new release: ${{ inputs.package }}"
+            gh release create "${{ inputs.package }}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "${{ inputs.package }} ${{ steps.result.outputs.version }}" \
+              --notes "Auto-built from AUR on $(date -u +%Y-%m-%d)" \
+              "${FILES[@]}"
+          else
+            # Update existing release, clobber old assets
+            echo "Updating existing release: ${{ inputs.package }}"
+            gh release upload "${{ inputs.package }}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber "${FILES[@]}"
+          fi
