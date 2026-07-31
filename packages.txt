@@ -51,3 +51,5 @@ wps-office-fonts
 
 codex-bin
 qoder-cli
+
+pi-coding-agent
