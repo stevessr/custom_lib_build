@@ -1,5 +1,15 @@
 # cscience-bin — 原生 Bun 运行时，从 GitHub Release 直接下载
 # 来源: https://github.com/Haleclipse/cscience
+# 下载: https://github.com/Haleclipse/cscience/releases/download/v$pkgver/cscience-npm-linux-x64-$pkgver.tgz
+#
+# tarball 结构（npm pack 格式，package/ 前缀，来自上游 CI dist/pkg-linux-x64）:
+#   package/
+#   ├── bin/claude-science.mjs   # 入口（shebang: #!/usr/bin/env bun）
+#   ├── package.json             # version = $pkgver-linux-x64
+#   ├── runtime/                 # web-dist, assets, sharp, seccomp...
+#   └── templates/byok.env
+#
+# 需要本地安装 bun（Arch: sudo pacman -S bun）
 
 pkgname=cscience-bin
 pkgver=0.0.2
@@ -13,7 +23,7 @@ options=('!strip')
 source=()
 sha256sums=()
 
-# 动态获取最新版本号（从 GitHub 标签）
+# 动态获取最新版本号（GitHub 标签，如 v0.0.2）
 pkgver() {
   git ls-remote --tags https://github.com/Haleclipse/cscience.git \
     | awk '{print $2}' \
@@ -25,16 +35,19 @@ prepare() {
   cd "$srcdir"
   local url="https://github.com/Haleclipse/cscience/releases/download/v${pkgver}/cscience-npm-linux-x64-${pkgver}.tgz"
   echo "Downloading: $url"
-  curl -fsSL -o cscience.tgz "$url"
-  tar -xzf cscience.tgz
+  curl -fsSL --retry 3 --retry-delay 2 -o cscience.tgz "$url"
+  tar -xzf cscience.tgz   # 解出 package/
   rm -f cscience.tgz
 }
 
 package() {
-  install -d "$pkgdir/usr/lib/cscience-bin"
-  cp -a . "$pkgdir/usr/lib/cscience-bin/"
+  cd "$srcdir/package"
 
-  # 入口 wrapper：cscience 运行在 bun 上
+  install -d "$pkgdir/usr/lib/cscience-bin"
+  cp -a bin package.json runtime templates "$pkgdir/usr/lib/cscience-bin/"
+
+  # 入口 wrapper：平台运行时是 Bun SEA（shebang bun），
+  # 用系统 bun 显式运行
   install -d "$pkgdir/usr/bin"
   cat > "$pkgdir/usr/bin/cscience" <<'WRAPPER'
 #!/bin/sh

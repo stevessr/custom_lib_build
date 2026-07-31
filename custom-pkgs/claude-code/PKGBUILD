@@ -1,44 +1,52 @@
-# claude-code — npm 包 @cometix/claude-code
-# Claude Code restored for Node.js (from official Bun SEA binaries, patched)
-# 构建方式：npm pack 下载 + npm install 安装依赖
+# claude-code — 原生 Node.js 运行时，从 GitHub Release 直接下载
+# 来源: https://github.com/CometixSpace/claude-code
+# 下载: https://github.com/CometixSpace/claude-code/releases/download/v$pkgver/cometix-claude-code-linux-x64-$pkgver.tgz
+#
+# tarball 结构（package/ 前缀，来自上游 CI DIST/packages/linux-x64）:
+#   package/
+#   ├── cli.js       # 入口（shebang: #!/usr/bin/env node）
+#   ├── package.json
+#   └── vendor/      # ripgrep 等平台二进制
+#
+# 平台包已经包含所有运行时，无需 npm install。
+# 需要本地安装 nodejs（Arch: sudo pacman -S nodejs）
 
 pkgname=claude-code
 pkgver=2.1.219
 pkgrel=1
-pkgdesc="Claude Code restored for Node.js - extracted from official Bun SEA binaries and patched for Node.js compatibility"
+pkgdesc="Claude Code restored for Node.js - native runtime from CometixSpace/claude-code"
 arch=('x86_64')
 url="https://github.com/CometixSpace/claude-code"
 license=('custom')
 depends=('nodejs>=22')
-makedepends=('npm')
 options=('!strip')
 source=()
 sha256sums=()
 
-# 动态获取 npm 最新版本
+# 动态获取最新版本号（GitHub 标签，如 v2.1.219）
 pkgver() {
-  npm view @cometix/claude-code version
+  git ls-remote --tags https://github.com/CometixSpace/claude-code.git \
+    | awk '{print $2}' \
+    | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V | tail -1
 }
 
 prepare() {
   cd "$srcdir"
-  npm pack @cometix/claude-code --pack-destination "$srcdir"
-  tar -xzf cometix-claude-code-*.tgz
-  rm -f cometix-claude-code-*.tgz
-  cd package
-  # 安装依赖 + 平台运行时（postinstall 把平台 cli.js 复制到主包）
-  npm install --omit=dev --no-audit --no-fund
+  local url="https://github.com/CometixSpace/claude-code/releases/download/v${pkgver}/cometix-claude-code-linux-x64-${pkgver}.tgz"
+  echo "Downloading: $url"
+  curl -fsSL --retry 3 --retry-delay 2 -o claude-code.tgz "$url"
+  tar -xzf claude-code.tgz   # 解出 package/
+  rm -f claude-code.tgz
 }
 
 package() {
   cd "$srcdir/package"
 
-  # 安装主包（含 postinstall 处理后的平台 cli.js）
-  install -d "$pkgdir/usr/lib/node_modules/@cometix/claude-code"
-  cp -a cli.js package.json README.md LICENSE.md install.cjs bun-ink-compat.cjs \
-    sdk-tools.d.ts node_modules "$pkgdir/usr/lib/node_modules/@cometix/claude-code/"
+  install -d "$pkgdir/usr/lib/claude-code"
+  cp -a cli.js package.json vendor "$pkgdir/usr/lib/claude-code/"
 
-  # 二进制入口
+  # 二进制入口（Node.js）
   install -d "$pkgdir/usr/bin"
-  ln -sf ../lib/node_modules/@cometix/claude-code/cli.js "$pkgdir/usr/bin/claude"
+  ln -sf /usr/lib/claude-code/cli.js "$pkgdir/usr/bin/claude"
 }

@@ -48,15 +48,15 @@ cscience
 
 ### 自定义 PKGBUILD（custom-pkgs/）
 
-AUR 之外的软件（如 npm 包、GitHub 直发程序）可以在 `custom-pkgs/<包名>/PKGBUILD` 提供自定义构建脚本，构建时优先于 AUR 使用：
+AUR 之外的软件可以在 `custom-pkgs/<包名>/PKGBUILD` 提供自定义构建脚本，构建时优先于 AUR 使用：
 
 ```
 custom-pkgs/
-├── claude-code/PKGBUILD   # npm: @cometix/claude-code (Claude Code for Node.js)
-└── cscience/PKGBUILD      # npm: @cometix/cscience (Claude Science BYOK)
+├── claude-code/PKGBUILD   # Claude Code for Node.js（从 CometixSpace/claude-code Release 获取）
+└── cscience-bin/PKGBUILD  # Claude Science BYOK（从 Haleclipse/cscience Release 获取，需 bun）
 ```
 
-自定义包使用 `pkgver()` 动态获取 npm 最新版本，每次构建都会重新检查更新。
+自定义包使用 `pkgver()` 动态获取最新版本号，从上游 GitHub Release 直接下载原生 tarball 构建，无需 npm。
 
 ### 3. 安装包
 
@@ -185,8 +185,8 @@ arch_lib/
 │   └── pre-build/            # 包级预构建钩子（可选）
 │       └── qoder-cli.sh      # 示例：修复安装脚本行为异常的包
 ├── custom-pkgs/              # 自定义 PKGBUILD（优先于 AUR）
-│   ├── claude-code/PKGBUILD  # npm 包 @cometix/claude-code
-│   └── cscience/PKGBUILD     # npm 包 @cometix/cscience
+│   ├── claude-code/PKGBUILD  # 从 CometixSpace/claude-code Release 下载
+│   └── cscience-bin/PKGBUILD # 从 Haleclipse/cscience Release 下载（原生 Bun）
 ├── packages.txt              # 要构建的包列表（AUR 或 custom-pkgs）
 ├── arch_lib.pub.asc          # 签名公钥占位
 └── README.md
