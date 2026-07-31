@@ -53,3 +53,4 @@ codex-bin
 qoder-cli
 
 pi-coding-agent
+flutter-bin

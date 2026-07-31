@@ -43,11 +43,14 @@ jobs:
           echo "Packages: $packages"
 
       - name: Download last-versions.txt from latest Release
-        uses: robin-th/extract-release-asset@v1
-        with:
-          asset_name: last-versions.txt
-          target_path: ./last-versions.txt
-        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "last-versions.txt" \
+            --dir . --clobber 2>/dev/null || true
+          touch last-versions.txt
 
       - name: Upload last-versions.txt as artifact
         uses: actions/upload-artifact@v4
@@ -108,28 +111,26 @@ jobs:
             aur-sources-${{ matrix.pkg }}-
 
       - name: Build package ${{ matrix.pkg }}
-        env:
-          SRCDEST: /home/builder/.cache/aur-sources
-          GITHUB_OUTPUT: ${{ github.workspace }}/output.txt
         run: |
           chown -R builder:builder "$GITHUB_WORKSPACE"
           cd "$GITHUB_WORKSPACE"
-          sudo -u builder -H bash scripts/build-package.sh "${{ matrix.pkg }}"
+          sudo -Eu builder bash scripts/build-package.sh \
+            "${{ matrix.pkg }}" "${{ github.workspace }}/output-${{ matrix.pkg }}.env"
 
       - name: Collect built package
         run: |
           mkdir -p artifact
           # Copy any .pkg.tar.* from the repo dir
           cp -v repos/x86_64/*.pkg.tar.* artifact/ 2>/dev/null || true
-          # Also write version info
-          source output.txt 2>/dev/null || true
-          if [ -n "${{ matrix.pkg }}" ]; then
-            echo "${{ matrix.pkg }}=${version:-unknown}" >> artifact/versions.txt
+          # Read version/skip info written by build-package.sh
+          outfile="${{ github.workspace }}/output-${{ matrix.pkg }}.env"
+          if [ -f "$outfile" ]; then
+            source "$outfile"
+            echo "${{ matrix.pkg }}=${version:-unknown}" > artifact/versions.txt
+          else
+            echo "${{ matrix.pkg }}=unknown" > artifact/versions.txt
           fi
-          # If skipped, mark it so publish knows
-          if [ "${skipped:-false}" = "true" ]; then
-            echo "skipped=${{ matrix.pkg }}" >> artifact/skipped.txt
-          fi
+          echo "Package output:"; cat artifact/versions.txt
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
@@ -174,7 +175,6 @@ jobs:
         with:
           pattern: pkg-*
           path: ./packages-artifact
-          merge-multiple: false
 
       - name: Merge versions and packages
         run: |
@@ -186,14 +186,8 @@ jobs:
             [ -d "$d" ] || continue
             # Copy .pkg.tar.* to repo dir
             cp -v "$d"/*.pkg.tar.* repos/x86_64/ 2>/dev/null || true
-            # Append versions
+            # Append version entry
             [ -f "$d/versions.txt" ] && cat "$d/versions.txt" >> build-versions.txt
-
-            # For skipped packages, copy the old package from last release
-            if [ -f "$d/skipped.txt" ]; then
-              pkg=$(echo "$d" | sed 's|packages-artifact/pkg-||')
-              echo "Skipped: $pkg — need old version"
-            fi
           done
 
           echo "Build versions:"
@@ -212,7 +206,7 @@ jobs:
           if [ -f ./prev-release/x86_64.tar.zst ]; then
             tar -xf ./prev-release/x86_64.tar.zst -C ./prev-release || true
             # Copy packages that don't already exist in our new build
-            for f in ./prev-release/x86_64/*.pkg.tar.*; do
+            for f in ./prev-release/repos/x86_64/*.pkg.tar.*; do
               [ -f "$f" ] || continue
               base=$(basename "$f")
               if [ ! -f "repos/x86_64/$base" ]; then

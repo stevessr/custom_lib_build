@@ -64,13 +64,13 @@ sudo pacman -S 包名      # 安装包
 
 对于名称以 `-git` 结尾的包，构建脚本会：
 
-1. 克隆 AUR 仓库，source `PKGBUILD`
-2. 运行 `pkgver()` 函数获取当前版本（`-git` 包的 `pkgver()` 通常包含 commit hash，例如 `r1234.a1b2c3d`）
-3. 对比 `last-versions.txt` 中记录的上次构建版本
-4. 如果版本相同 → **跳过构建**，从上一个 Release 的下载缓存中复用已构建的包
-5. 如果版本不同 → 正常构建，更新版本记录
+1. 克隆 AUR 仓库（仅 PKGBUILD），提取其中的 `git+` 源码 URL
+2. 通过 `git ls-remote` 查询上游仓库当前 HEAD 的 commit hash
+3. 对比 `last-versions.txt` 中记录的上次构建 hash
+4. 如果相同 → **跳过构建**，publish 阶段从上一个 Release 的产物中复用已构建的包
+5. 如果不同 → 正常构建，更新版本记录
 
-这避免了每天重复编译没有上游更新的 `-git` 包，大幅节省构建时间。
+**不下载源码、不编译**，只做一次轻量远程查询，非常适合每日定时任务。这避免了每天重复编译没有上游更新的 `-git` 包，大幅节省构建时间。
 
 ## 手动触发构建
 
@@ -81,10 +81,9 @@ sudo pacman -S 包名      # 安装包
 ```
 arch_lib/
 ├── .github/workflows/
-│   └── build-repo.yml         # GitHub Actions 工作流（matrix + release）
+│   └── build-repo.yaml        # GitHub Actions 工作流（matrix + release）
 ├── scripts/
-│   ├── build-package.sh      # 单包构建脚本（含 -git 跳过逻辑）
-│   └── create-repo.sh        # 仓库数据库生成脚本
+│   └── build-package.sh      # 单包构建脚本（含 -git 跳过逻辑）
 ├── packages.txt              # 要构建的 AUR 包列表
 └── README.md
 ```
