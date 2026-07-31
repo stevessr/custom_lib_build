@@ -63,6 +63,7 @@ spack
 ccline-bin
 cc-switch-bin
 claude-desktop
+paseo-desktop-bin
 
 # Custom PKGBUILD (npm 包，见 custom-pkgs/ 目录)
 claude-code
