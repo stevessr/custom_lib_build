@@ -32,17 +32,31 @@ packages.txt ──▶ prepare ──▶ build (matrix, 调 build-package.yaml)
 
 ### 2. 配置要构建的包
 
-编辑 `packages.txt`，每行一个 AUR 包名：
+编辑 `packages.txt`，每行一个包名：
 
 ```txt
 # 常规包 — 每次重建
-yay
-paru
+antigravity
 
 # -git 包 — 仅 commit hash 变化时才重建
 waybar-git
-hyprland-git
+
+# 自定义 PKGBUILD 包（npm 等，见 custom-pkgs/）
+claude-code
+cscience
 ```
+
+### 自定义 PKGBUILD（custom-pkgs/）
+
+AUR 之外的软件（如 npm 包、GitHub 直发程序）可以在 `custom-pkgs/<包名>/PKGBUILD` 提供自定义构建脚本，构建时优先于 AUR 使用：
+
+```
+custom-pkgs/
+├── claude-code/PKGBUILD   # npm: @cometix/claude-code (Claude Code for Node.js)
+└── cscience/PKGBUILD      # npm: @cometix/cscience (Claude Science BYOK)
+```
+
+自定义包使用 `pkgver()` 动态获取 npm 最新版本，每次构建都会重新检查更新。
 
 ### 3. 安装包
 
@@ -166,11 +180,14 @@ arch_lib/
 │   ├── build-keyring.yaml     # 构建 custom-keyring 密钥环包
 │   └── manual-build.yaml      # 手动触发单包构建
 ├── scripts/
-│   ├── build-package.sh      # 单包构建脚本（含 -git 跳过逻辑）
+│   ├── build-package.sh      # 单包构建脚本（含 -git 跳过逻辑 + custom PKGBUILD）
 │   ├── generate-signing-key.sh # 一键生成签名密钥（自动导入 pacman 密钥环）
 │   └── pre-build/            # 包级预构建钩子（可选）
 │       └── qoder-cli.sh      # 示例：修复安装脚本行为异常的包
-├── packages.txt              # 要构建的 AUR 包列表
+├── custom-pkgs/              # 自定义 PKGBUILD（优先于 AUR）
+│   ├── claude-code/PKGBUILD  # npm 包 @cometix/claude-code
+│   └── cscience/PKGBUILD     # npm 包 @cometix/cscience
+├── packages.txt              # 要构建的包列表（AUR 或 custom-pkgs）
 ├── arch_lib.pub.asc          # 签名公钥占位
 └── README.md
 ```

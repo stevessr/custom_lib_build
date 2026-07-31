@@ -1,0 +1,44 @@
+# claude-code — npm 包 @cometix/claude-code
+# Claude Code restored for Node.js (from official Bun SEA binaries, patched)
+# 构建方式：npm pack 下载 + npm install 安装依赖
+
+pkgname=claude-code
+pkgver=2.1.219
+pkgrel=1
+pkgdesc="Claude Code restored for Node.js - extracted from official Bun SEA binaries and patched for Node.js compatibility"
+arch=('x86_64')
+url="https://github.com/CometixSpace/claude-code"
+license=('custom')
+depends=('nodejs>=22')
+makedepends=('npm')
+options=('!strip')
+source=()
+sha256sums=()
+
+# 动态获取 npm 最新版本
+pkgver() {
+  npm view @cometix/claude-code version
+}
+
+prepare() {
+  cd "$srcdir"
+  npm pack @cometix/claude-code --pack-destination "$srcdir"
+  tar -xzf cometix-claude-code-*.tgz
+  rm -f cometix-claude-code-*.tgz
+  cd package
+  # 安装依赖 + 平台运行时（postinstall 把平台 cli.js 复制到主包）
+  npm install --omit=dev --no-audit --no-fund
+}
+
+package() {
+  cd "$srcdir/package"
+
+  # 安装主包（含 postinstall 处理后的平台 cli.js）
+  install -d "$pkgdir/usr/lib/node_modules/@cometix/claude-code"
+  cp -a cli.js package.json README.md LICENSE.md install.cjs bun-ink-compat.cjs \
+    sdk-tools.d.ts node_modules "$pkgdir/usr/lib/node_modules/@cometix/claude-code/"
+
+  # 二进制入口
+  install -d "$pkgdir/usr/bin"
+  ln -sf ../lib/node_modules/@cometix/claude-code/cli.js "$pkgdir/usr/bin/claude"
+}

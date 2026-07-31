@@ -41,17 +41,32 @@ NC='\033[0m'
 
 mkdir -p "$REPO_DIR" "$BUILD_DIR" "$SRC_CACHE"
 
-# ── Clone/update AUR package (PKGBUILD only) ─────────────────────────
-PKG_DIR="$BUILD_DIR/$PKG"
-
-if [ -d "$PKG_DIR/.git" ]; then
-    cd "$PKG_DIR"
-    git pull --ff-only 2>&1 | sed 's/^/  /' || true
+# ── Source: custom PKGBUILD or AUR? ────────────────────────────────
+CUSTOM_PKG="$GITHUB_WORKSPACE/custom-pkgs/$PKG"
+IS_CUSTOM=0
+if [ -f "$CUSTOM_PKG/PKGBUILD" ]; then
+    IS_CUSTOM=1
+    echo -e "${BLUE}  Using custom PKGBUILD: custom-pkgs/$PKG${NC}"
 fi
 
-if [ ! -d "$PKG_DIR/.git" ]; then
+# ── Prepare build dir (custom PKGBUILD or AUR clone) ────────────────
+PKG_DIR="$BUILD_DIR/$PKG"
+
+if [ "$IS_CUSTOM" -eq 1 ]; then
+    # Custom PKGBUILD: copy from repo, no git clone
     rm -rf "$PKG_DIR"
-    git clone --depth=1 "https://aur.archlinux.org/$PKG.git" "$PKG_DIR" 2>&1 | sed 's/^/  /'
+    mkdir -p "$PKG_DIR"
+    cp -a "$CUSTOM_PKG/." "$PKG_DIR/"
+else
+    if [ -d "$PKG_DIR/.git" ]; then
+        cd "$PKG_DIR"
+        git pull --ff-only 2>&1 | sed 's/^/  /' || true
+    fi
+
+    if [ ! -d "$PKG_DIR/.git" ]; then
+        rm -rf "$PKG_DIR"
+        git clone --depth=1 "https://aur.archlinux.org/$PKG.git" "$PKG_DIR" 2>&1 | sed 's/^/  /'
+    fi
 fi
 
 # ── Pre-build hook (per-package tweaks) ────────────────────────────
@@ -69,7 +84,13 @@ cd "$PKG_DIR"
 # ── Determine current version ────────────────────────────────────────
 echo -e "${BLUE}  Determining current version of $PKG ...${NC}"
 
-if [[ "$PKG" == *-git ]]; then
+if [ "$IS_CUSTOM" -eq 1 ]; then
+    # Custom PKGBUILD: npm-style packages version via pkgver() at build
+    # time; use a unique marker so we always rebuild (npm versions are
+    # dynamic and makepkg resolves them via pkgver())
+    current_ver="custom-$(date -u +%Y%m%d%H%M)"
+    echo "  Custom PKGBUILD — will always rebuild"
+elif [[ "$PKG" == *-git ]]; then
     # -git: find first git+ source URL, query upstream HEAD commit
     git_urls="$(
         bash -c '

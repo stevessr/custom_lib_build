@@ -1,0 +1,44 @@
+# cscience-bin — 原生 Bun 运行时，从 GitHub Release 直接下载
+# 来源: https://github.com/Haleclipse/cscience
+
+pkgname=cscience-bin
+pkgver=0.0.2
+pkgrel=1
+pkgdesc="Run Claude Science locally with your own Anthropic API key (native Bun binary)"
+arch=('x86_64')
+url="https://github.com/Haleclipse/cscience"
+license=('MIT')
+depends=('bun>=1.1.0')
+options=('!strip')
+source=()
+sha256sums=()
+
+# 动态获取最新版本号（从 GitHub 标签）
+pkgver() {
+  git ls-remote --tags https://github.com/Haleclipse/cscience.git \
+    | awk '{print $2}' \
+    | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V | tail -1
+}
+
+prepare() {
+  cd "$srcdir"
+  local url="https://github.com/Haleclipse/cscience/releases/download/v${pkgver}/cscience-npm-linux-x64-${pkgver}.tgz"
+  echo "Downloading: $url"
+  curl -fsSL -o cscience.tgz "$url"
+  tar -xzf cscience.tgz
+  rm -f cscience.tgz
+}
+
+package() {
+  install -d "$pkgdir/usr/lib/cscience-bin"
+  cp -a . "$pkgdir/usr/lib/cscience-bin/"
+
+  # 入口 wrapper：cscience 运行在 bun 上
+  install -d "$pkgdir/usr/bin"
+  cat > "$pkgdir/usr/bin/cscience" <<'WRAPPER'
+#!/bin/sh
+exec /usr/bin/bun /usr/lib/cscience-bin/bin/claude-science.mjs "$@"
+WRAPPER
+  chmod +x "$pkgdir/usr/bin/cscience"
+}
