@@ -106,14 +106,28 @@ bash scripts/generate-signing-key.sh [owner/repo]
 
 ### 用户：验证签名
 
-**一键导入**（推荐，自动从 Release 下载公钥并导入 pacman 密钥环）：
+**方式一：安装 custom-keyring 包（推荐）**
+
+项目提供单独的 `custom-keyring` 包（每日自动构建），一键导入公钥到 pacman 密钥环并信任：
 
 ```bash
-# 在任意目录执行（自动从 Release 下载公钥）
-bash <(curl -fsSL https://raw.githubusercontent.com/你的用户名/arch_lib/main/scripts/import-signing-key.sh) 你的用户名/arch_lib
+# 下载并安装 keyring 包（tag = custom-keyring）
+gh release download custom-keyring --repo 你的用户名/arch_lib --pattern '*.pkg.tar.zst'
+sudo pacman -U custom-keyring-*.pkg.tar.zst
+
+# 填充 pacman 密钥环（导入公钥 + 本地信任指纹）
+sudo pacman-key --populate arch_lib
 ```
 
-**手动流程**（等价）：
+然后在 `/etc/pacman.conf` 启用严格签名：
+
+```ini
+[arch_lib]
+SigLevel = Required DatabaseOptional
+Server = https://你的用户名.github.io/arch_lib/releases/download/latest
+```
+
+**方式二：手动导入**
 
 ```bash
 # 下载公钥
@@ -149,11 +163,11 @@ arch_lib/
 ├── .github/workflows/
 │   ├── build-repo.yaml        # 调度器：prepare + matrix + publish 汇总
 │   ├── build-package.yaml     # 可复用：单包构建 + 上传到包名 Release
+│   ├── build-keyring.yaml     # 构建 custom-keyring 密钥环包
 │   └── manual-build.yaml      # 手动触发单包构建
 ├── scripts/
 │   ├── build-package.sh      # 单包构建脚本（含 -git 跳过逻辑）
 │   ├── generate-signing-key.sh # 一键生成签名密钥（自动导入 pacman 密钥环）
-│   ├── import-signing-key.sh # 用户侧一键导入公钥到 pacman 密钥环
 │   └── pre-build/            # 包级预构建钩子（可选）
 │       └── qoder-cli.sh      # 示例：修复安装脚本行为异常的包
 ├── packages.txt              # 要构建的 AUR 包列表

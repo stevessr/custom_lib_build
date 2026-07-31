@@ -1,0 +1,145 @@
+# =============================================================================
+# Build Keyring Package — build and publish the custom-keyring package
+#
+# The custom-keyring package installs the repo signing public key into
+# /usr/share/pacman/keyrings/ so that users can run:
+#
+#     sudo pacman -U custom-keyring-*.pkg.tar.zst
+#     sudo pacman-key --populate arch_lib
+#
+# which imports the key into pacman's keyring AND locally signs (trusts)
+# the fingerprints listed in the keyring's -trusted file. After that,
+# SigLevel = Required DatabaseOptional works without manual pacman-key
+# commands or keyserver lookups.
+#
+# Trigger: manual (workflow_dispatch) or daily cron (01:00 UTC, after the
+# main repo build at 00:00). Key must be published on the `latest`
+# release (or present as arch_lib.pub.asc in the repo source).
+# =============================================================================
+
+name: Build Keyring Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --user root
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize Arch system
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel git sudo
+
+      - name: Setup builder user
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          mkdir -p /tmp/keyring-build
+          chown -R builder:builder /tmp/keyring-build
+
+      # ── Obtain the public key ─────────────────────────────────────
+      - name: Download public key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/keyring-build
+          cd /tmp/keyring-build
+
+          # Prefer the key published on the latest release
+          gh release download latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "arch_lib.pub.asc" \
+            --dir . --clobber 2>/dev/null || true
+
+          # Fall back to the key committed in the repo source
+          if [ ! -s arch_lib.pub.asc ]; then
+            echo "Not on release, falling back to repo source..."
+            cp "$GITHUB_WORKSPACE/arch_lib.pub.asc" .
+          fi
+
+          # Validate it is a real PGP public key
+          if ! gpg --with-colons --show-keys arch_lib.pub.asc >/dev/null 2>&1; then
+            echo "✗ arch_lib.pub.asc is not a valid PGP public key."
+            echo "  Run scripts/generate-signing-key.sh first (owner side)."
+            exit 1
+          fi
+
+          FPR=$(gpg --with-colons --show-keys arch_lib.pub.asc | awk -F: '/^fpr/{print $10; exit}')
+          echo "Key fingerprint: $FPR"
+          echo "FPR=$FPR" >> "$GITHUB_ENV"
+
+      # ── Generate keyring files and PKGBUILD ───────────────────────
+      - name: Prepare keyring package
+        run: |
+          cd /tmp/keyring-build
+
+          # Binary keyring file (ASCII-armored → binary)
+          gpg --dearmor < arch_lib.pub.asc > arch_lib.gpg
+
+          # Trusted fingerprints file (one per line)
+          echo "$FPR" > arch_lib-trusted
+
+          cat > PKGBUILD <<'PKGEOF'
+          pkgname=custom-keyring
+          pkgver=1.0
+          pkgrel=1
+          pkgdesc="arch_lib repository signing keyring"
+          arch=('any')
+          url="https://github.com/${GITHUB_REPOSITORY}"
+          license=('custom')
+          depends=('gnupg' 'archlinux-keyring')
+          source=("arch_lib.gpg" "arch_lib-trusted")
+          sha256sums=('__SHA_GPG__' '__SHA_TRUSTED__')
+
+          package() {
+            install -Dm644 arch_lib.gpg "$pkgdir/usr/share/pacman/keyrings/arch_lib.gpg"
+            install -Dm644 arch_lib-trusted "$pkgdir/usr/share/pacman/keyrings/arch_lib-trusted"
+          }
+          PKGEOF
+
+          # Fill in checksums
+          SHA_GPG=$(sha256sum arch_lib.gpg | awk '{print $1}')
+          SHA_TRUSTED=$(sha256sum arch_lib-trusted | awk '{print $1}')
+          sed -i "s/__SHA_GPG__/$SHA_GPG/; s/__SHA_TRUSTED__/$SHA_TRUSTED/" PKGBUILD
+
+          echo "--- PKGBUILD ---"
+          cat PKGBUILD
+
+      # ── Build the package ─────────────────────────────────────────
+      - name: Build keyring package
+        run: |
+          chown -R builder:builder /tmp/keyring-build
+          cd /tmp/keyring-build
+          sudo -EHu builder makepkg -f --noconfirm 2>&1 | tail -30
+          ls -lh *.pkg.tar.*
+
+      # ── Publish to custom-keyring release ─────────────────────────
+      - name: Publish to release custom-keyring
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd /tmp/keyring-build
+
+          FILES=()
+          for f in *.pkg.tar.* *.pkg.tar.*.sig; do
+            [ -f "$f" ] && FILES+=("$f")
+          done
+
+          gh release delete custom-keyring \
+            --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+
+          gh release create custom-keyring \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "custom-keyring $(date -u +%Y-%m-%d)" \
+            --notes "arch_lib 仓库签名密钥环包。安装: sudo pacman -U custom-keyring-*.pkg.tar.zst && sudo pacman-key --populate arch_lib。之后 pacman.conf 使用 SigLevel = Required DatabaseOptional。" \
+            "${FILES[@]}" || true
