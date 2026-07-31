@@ -58,6 +58,17 @@ if [ "$IS_CUSTOM" -eq 1 ]; then
     mkdir -p "$PKG_DIR"
     cp -a "$CUSTOM_PKG/." "$PKG_DIR/"
 else
+    # Determine the AUR git repo name (PackageBase): split packages like
+    # rustrover-jre live in the rustrover.git repo. Query AUR RPC.
+    AUR_REPO="$PKG"
+    BASE_INFO=$(curl -fsSL --max-time 10 \
+        "https://aur.archlinux.org/rpc/v5/info?arg[]=$PKG" 2>/dev/null \
+        | jq -r '.results[0].PackageBase // empty' 2>/dev/null)
+    if [ -n "$BASE_INFO" ] && [ "$BASE_INFO" != "$PKG" ]; then
+        AUR_REPO="$BASE_INFO"
+        echo -e "${YELLOW}  Split package: cloning $AUR_REPO.git (base of $PKG)${NC}"
+    fi
+
     if [ -d "$PKG_DIR/.git" ]; then
         cd "$PKG_DIR"
         git pull --ff-only 2>&1 | sed 's/^/  /' || true
@@ -65,7 +76,7 @@ else
 
     if [ ! -d "$PKG_DIR/.git" ]; then
         rm -rf "$PKG_DIR"
-        git clone --depth=1 "https://aur.archlinux.org/$PKG.git" "$PKG_DIR" 2>&1 | sed 's/^/  /'
+        git clone --depth=1 "https://aur.archlinux.org/$AUR_REPO.git" "$PKG_DIR" 2>&1 | sed 's/^/  /'
     fi
 fi
 

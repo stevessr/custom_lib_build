@@ -52,7 +52,7 @@ jobs:
       - name: Initialize Arch system
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel git libglvnd pacman-contrib sudo
+          pacman -S --noconfirm --needed base-devel git jq libglvnd pacman-contrib sudo
 
       - name: Setup builder user
         run: |
