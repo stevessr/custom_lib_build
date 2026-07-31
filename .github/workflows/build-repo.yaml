@@ -2,14 +2,19 @@
 # Build AUR Repository — daily cron + manual trigger
 #
 # Strategy:
-#   1. prepare  — read packages.txt, fetch last-versions.txt from latest Release
-#   2. build    — matrix: one job per package, skip -git if commit hash unchanged
-#   3. publish  — collect artifacts, repo-add, create GitHub Release with repo tarball
+#   1. prepare  — read packages.txt, generate matrix
+#   2. build    — matrix: one job per package; each job builds its package
+#                 and uploads it DIRECTLY to its own GitHub Release
+#                 (tag = package name, overwritten on every run)
 #
-# User adds to /etc/pacman.conf:
-#   [arch_lib]
-#   SigLevel = Optional TrustAll
-#   Server = https://github.com/<user>/arch_lib/releases/download/latest/$arch
+# Each package release contains:
+#   <pkg>.pkg.tar.zst        — built package
+#   <pkg>.pkg.tar.zst.sig    — GPG signature (if signing key configured)
+#   version.txt              — last built version (used for -git skip check)
+#
+# -git packages: build-package.sh compares the upstream commit hash
+# (git ls-remote) against version.txt from the previous release; if
+# unchanged, the build is skipped and the old release is left in place.
 # =============================================================================
 
 name: Build AUR Repository
@@ -26,7 +31,7 @@ permissions:
   contents: write
 
 jobs:
-  # ── Prepare: parse package list, download last-versions.txt ─────────
+  # ── Prepare: parse package list ────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
     outputs:
@@ -37,29 +42,11 @@ jobs:
       - name: Generate matrix from packages.txt
         id: gen-matrix
         run: |
-          # Read packages, strip comments/blanks
           packages=$(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' packages.txt | grep -v '^$' | jq -R . | jq -s -c .)
           echo "matrix=${packages}" >> "$GITHUB_OUTPUT"
           echo "Packages: $packages"
 
-      - name: Download last-versions.txt from latest Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release download latest \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "last-versions.txt" \
-            --dir . --clobber 2>/dev/null || true
-          touch last-versions.txt
-
-      - name: Upload last-versions.txt as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: last-versions
-          path: ./last-versions.txt
-          if-no-files-found: ignore
-
-  # ── Build: one job per package (matrix) ─────────────────────────────
+  # ── Build: one job per package, direct release upload ──────────────
   build:
     needs: prepare
     runs-on: ubuntu-latest
@@ -87,19 +74,22 @@ jobs:
           mkdir -p /home/builder/.cache/aur-sources /tmp/aur-build
           chown -R builder:builder /home/builder /tmp/aur-build
 
-      - name: Download last-versions artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: last-versions
-          path: ./last-versions
-        continue-on-error: true
-
-      - name: Prepare last-versions file
+      # ── Version tracking: fetch previous version from own release ──
+      - name: Fetch previous version from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -f ./last-versions/last-versions.txt ]; then
-            mv ./last-versions/last-versions.txt ./last-versions.txt
+          gh release download "${{ matrix.pkg }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "version.txt" \
+            --dir . --clobber 2>/dev/null || true
+          if [ -f version.txt ]; then
+            ver=$(cat version.txt)
+            echo "${{ matrix.pkg }}=${ver}" > last-versions.txt
+            echo "Previous version: $ver"
           else
-            touch ./last-versions.txt
+            touch last-versions.txt
+            echo "No previous version — will build"
           fi
 
       - name: Cache AUR sources
@@ -110,55 +100,31 @@ jobs:
           restore-keys: |
             aur-sources-${{ matrix.pkg }}-
 
+      # ── Build (skips -git packages with unchanged commit) ──────────
       - name: Build package ${{ matrix.pkg }}
         run: |
           chown -R builder:builder "$GITHUB_WORKSPACE"
           cd "$GITHUB_WORKSPACE"
           # -E: keep env (SRCDEST, GITHUB_WORKSPACE), -H: set HOME=/home/builder
-          #   (root's HOME=/github/home is not writable by builder — breaks
-          #    Go/Rust build caches)
-          sudo -EHu builder bash scripts/build-package.sh \
-            "${{ matrix.pkg }}" "$GITHUB_WORKSPACE/output-${{ matrix.pkg }}.env"
+          sudo -EHu builder bash scripts/build-package.sh "${{ matrix.pkg }}"
 
-      - name: Collect built package
+      # ── Read build result ──────────────────────────────────────────
+      - name: Check build result
+        id: result
         run: |
-          mkdir -p artifact
-          # Copy any .pkg.tar.* from the repo dir
-          cp -v repos/x86_64/*.pkg.tar.* artifact/ 2>/dev/null || true
-          # Read version/skip info written by build-package.sh
           outfile="$GITHUB_WORKSPACE/output-${{ matrix.pkg }}.env"
           if [ -f "$outfile" ]; then
             source "$outfile"
-            echo "${{ matrix.pkg }}=${version:-unknown}" > artifact/versions.txt
+            echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
+            echo "skipped=${skipped:-false}" >> "$GITHUB_OUTPUT"
           else
-            echo "${{ matrix.pkg }}=unknown" > artifact/versions.txt
+            echo "version=unknown" >> "$GITHUB_OUTPUT"
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "Package output:"; cat artifact/versions.txt
 
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pkg-${{ matrix.pkg }}
-          path: artifact/
-          if-no-files-found: warn
-
-  # ── Publish: collect all artifacts, repo-add, create Release ────────
-  publish:
-    needs: [prepare, build]
-    runs-on: ubuntu-latest
-    if: always() && needs.prepare.result == 'success'
-    container:
-      image: archlinux:latest
-      options: --user root
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Initialize Arch system
-        run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel gnupg pacman-contrib
-
-      - name: Import signing key
+      # ── Sign package (if signing key configured) ───────────────────
+      - name: Sign package
+        if: steps.result.outputs.skipped != 'true'
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
@@ -166,204 +132,44 @@ jobs:
             printf '%s\n' "$GPG_PRIVATE_KEY" > /tmp/gpg-key.asc
             gpg --batch --import /tmp/gpg-key.asc
             rm -f /tmp/gpg-key.asc
-            # Extract fingerprint of the imported secret key
-            FPR=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
-            echo "KEY_ID=$FPR" >> "$GITHUB_ENV"
-            echo "Signing key imported: $FPR"
-          else
-            echo "No GPG_PRIVATE_KEY secret — repository will be unsigned"
-          fi
-
-      - name: Download last-versions artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: last-versions
-          path: ./last-versions
-        continue-on-error: true
-
-      - name: Prepare last-versions file
-        run: |
-          if [ -f ./last-versions/last-versions.txt ]; then
-            mv ./last-versions/last-versions.txt ./last-versions.txt
-          else
-            touch ./last-versions.txt
-          fi
-
-      - name: Download all package artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: pkg-*
-          path: ./packages-artifact
-
-      - name: Merge versions and packages
-        run: |
-          mkdir -p repos/x86_64
-
-          # Merge version files from each matrix job
-          : > build-versions.txt
-          for d in packages-artifact/pkg-*; do
-            [ -d "$d" ] || continue
-            # Copy .pkg.tar.* to repo dir (sanitize epoch colons)
-            for f in "$d"/*.pkg.tar.*; do
+            for f in repos/x86_64/*.pkg.tar.*; do
               [ -f "$f" ] || continue
-              base=$(basename "$f" | tr ':' '_')
-              cp -v "$f" "repos/x86_64/$base"
+              echo "Signing: $f"
+              gpg --batch --yes --detach-sign "$f"
             done
-            # Append version entry
-            [ -f "$d/versions.txt" ] && cat "$d/versions.txt" >> build-versions.txt
-          done
-
-          echo "Build versions:"
-          cat build-versions.txt || true
-
-      - name: Download packages from previous Release (for skipped -git packages)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Download the previous release's packages to reuse those that
-          # were skipped this round (-git with unchanged commit).
-          gh release download latest \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern '*.pkg.tar.zst' \
-            --dir ./prev-pkgs || true
-          # Copy packages that don't already exist in our new build
-          for f in ./prev-pkgs/*.pkg.tar.*; do
-            [ -f "$f" ] || continue
-            base=$(basename "$f" | tr ':' '_')
-            if [ ! -f "repos/x86_64/$base" ]; then
-              cp -v "$f" "repos/x86_64/$base"
-              echo "Reused from previous release: $base"
-            fi
-          done
-          # Copy previous versions file entries for skipped packages
-          gh release download latest \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "last-versions.txt" \
-            --dir ./prev-release --clobber || true
-          if [ -f ./prev-release/last-versions.txt ]; then
-            cat ./prev-release/last-versions.txt >> retained-versions.txt
-          fi
-
-      - name: Create repository database
-        run: |
-          cd repos/x86_64
-
-          PKG_COUNT=$(ls -1 *.pkg.tar.* 2>/dev/null | wc -l || true)
-          echo "Packages in repo: $PKG_COUNT"
-          if [ "$PKG_COUNT" -eq 0 ]; then
-            echo "No packages — aborting"
-            exit 1
-          fi
-
-          rm -f arch_lib.db.tar.gz arch_lib.db arch_lib.files.tar.gz arch_lib.files
-
-          if [ -n "$KEY_ID" ]; then
-            # Sign the database (GPGKEY env var used by repo-add)
-            echo "Signing repository database with $KEY_ID"
-            GPGKEY="$KEY_ID" repo-add --remove --new --sign arch_lib.db.tar.gz ./*.pkg.tar.*
           else
-            repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.*
+            echo "No GPG_PRIVATE_KEY secret — package unsigned"
           fi
 
-          # Create real copies (not symlinks) — GitHub Release assets are
-          # flat, and pacman requests both <repo>.db and <repo>.db.tar.gz
-          rm -f arch_lib.db arch_lib.files
-          cp arch_lib.db.tar.gz arch_lib.db
-          cp arch_lib.files.tar.gz arch_lib.files
-
-          # Copy detached signatures for the .db copies too
-          if [ -n "$KEY_ID" ]; then
-            cp arch_lib.db.tar.gz.sig arch_lib.db.sig 2>/dev/null || true
-            cp arch_lib.files.tar.gz.sig arch_lib.files.sig 2>/dev/null || true
-          fi
-          ls -lh
-
-      - name: Sign packages
-        if: env.KEY_ID != ''
-        run: |
-          cd repos/x86_64
-          for f in *.pkg.tar.*; do
-            [ -f "$f" ] || continue
-            echo "Signing: $f"
-            gpg --batch --yes --detach-sign --local-user "$KEY_ID" "$f"
-          done
-          echo "All packages signed"
-
-      - name: Update last-versions.txt
-        run: |
-          # Start with previous versions
-          cp last-versions.txt new-versions.txt 2>/dev/null || : > new-versions.txt
-
-          # Overlay this run's versions
-          if [ -f build-versions.txt ]; then
-            while IFS='=' read -r pkg ver; do
-              [ -n "$pkg" ] || continue
-              if grep -q "^${pkg}=" new-versions.txt 2>/dev/null; then
-                sed -i "s/^${pkg}=.*/${pkg}=${ver}/" new-versions.txt
-              else
-                echo "${pkg}=${ver}" >> new-versions.txt
-              fi
-            done < build-versions.txt
-          fi
-
-          # Retain versions for skipped packages from previous release
-          if [ -f retained-versions.txt ]; then
-            while IFS='=' read -r pkg ver; do
-              [ -n "$pkg" ] || continue
-              if ! grep -q "^${pkg}=" new-versions.txt 2>/dev/null; then
-                echo "${pkg}=${ver}" >> new-versions.txt
-              fi
-            done < retained-versions.txt
-          fi
-
-          mv new-versions.txt last-versions.txt
-          echo "Final versions:"
-          cat last-versions.txt
-
-      - name: Delete previous latest release
+      # ── Upload directly to this package's release ──────────────────
+      - name: Publish to release ${{ matrix.pkg }}
+        if: steps.result.outputs.skipped != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          cd "$GITHUB_WORKSPACE"
+          # Write version.txt asset for next run's -git skip check
+          echo "${{ steps.result.outputs.version }}" > version.txt
+          cp version.txt repos/x86_64/ 2>/dev/null || true
 
-      - name: Compute release name
-        id: release-name
-        run: |
-          echo "value=Arch Lib Repository $(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "Packages to upload:"
+          ls -lh repos/x86_64/
 
-      - name: Create new Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: ${{ steps.release-name.outputs.value }}
-          body: |
-            ## arch_lib pacman repository
+          # Delete previous release (overwrite semantics)
+          gh release delete "${{ matrix.pkg }}" \
+            --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
 
-            Daily build of AUR packages.
+          # Build the file list dynamically (globs that match nothing
+          # would be passed as literal args and error out)
+          FILES=()
+          for f in repos/x86_64/*.pkg.tar.* repos/x86_64/*.sig repos/x86_64/version.txt; do
+            [ -f "$f" ] && FILES+=("$f")
+          done
 
-            **Usage** — add to `/etc/pacman.conf`:
-            ```ini
-            [arch_lib]
-            SigLevel = Optional TrustAll
-            Server = ${{ github.server_url }}/${{ github.repository }}/releases/download/latest
-            ```
-
-            Then: `sudo pacman -Sy && sudo pacman -S <package>`
-
-            **Signing**: 若仓库已配置 GPG_PRIVATE_KEY，包和数据库均带 `.sig` 签名。
-            导入公钥后可改用 `SigLevel = Required DatabaseOptional` 验证。
-          files: |
-            last-versions.txt
-            arch_lib.pub.asc
-            repos/x86_64/*.pkg.tar.zst
-            repos/x86_64/*.pkg.tar.zst.sig
-            repos/x86_64/arch_lib.db.tar.gz
-            repos/x86_64/arch_lib.db.tar.gz.sig
-            repos/x86_64/arch_lib.db
-            repos/x86_64/arch_lib.db.sig
-            repos/x86_64/arch_lib.files.tar.gz
-            repos/x86_64/arch_lib.files.tar.gz.sig
-            repos/x86_64/arch_lib.files
-            repos/x86_64/arch_lib.files.sig
-          prerelease: false
-          make_latest: true
+          # Create new release with all artifacts
+          # (|| true: if delete+cleanup-tag failed, tag may still exist)
+          gh release create "${{ matrix.pkg }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "${{ matrix.pkg }} ${{ steps.result.outputs.version }}" \
+            --notes "Auto-built from AUR on $(date -u +%Y-%m-%d)" \
+            "${FILES[@]}" || true
