@@ -54,3 +54,12 @@ qoder-cli
 
 pi-coding-agent
 flutter-bin
+
+ngrok
+rustrover
+rustrover-jre
+
+spack
+ccline-bin
+cc-switch-bin
+claude-desktop
