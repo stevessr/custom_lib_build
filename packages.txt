@@ -49,7 +49,7 @@ warp-plus-bin
 wechat-bin
 wps-office-fonts
 
-codex-bin
+openai-codex-bin
 qoder-cli
 
 pi-coding-agent

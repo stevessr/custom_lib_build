@@ -54,6 +54,16 @@ if [ ! -d "$PKG_DIR/.git" ]; then
     git clone --depth=1 "https://aur.archlinux.org/$PKG.git" "$PKG_DIR" 2>&1 | sed 's/^/  /'
 fi
 
+# ── Pre-build hook (per-package tweaks) ────────────────────────────
+HOOK="$GITHUB_WORKSPACE/scripts/pre-build/$PKG.sh"
+if [ -f "$HOOK" ]; then
+    echo -e "${BLUE}  Running pre-build hook: scripts/pre-build/$PKG.sh${NC}"
+    bash "$HOOK" "$PKG_DIR" "$PKG" || {
+        echo -e "${RED}  ✗ Pre-build hook failed for $PKG${NC}"
+        exit 1
+    }
+fi
+
 cd "$PKG_DIR"
 
 # ── Determine current version ────────────────────────────────────────
@@ -133,8 +143,11 @@ for pkgfile in "$PKG_DIR"/*.pkg.tar.*; do
     [ -n "$name" ] || continue
     # Remove any old version of the same package
     rm -f "$REPO_DIR/${name}"-*.pkg.tar.* 2>/dev/null || true
-    cp "$pkgfile" "$REPO_DIR/"
-    echo -e "${GREEN}  ✓ Built: $(basename "$pkgfile")${NC}"
+    # Sanitize filename: epoch colons (e.g. kiro-ide-2:1.0.242) are rejected
+    # by GitHub artifact upload. Replace ':' with '_' everywhere.
+    destname=$(basename "$pkgfile" | tr ':' '_')
+    cp "$pkgfile" "$REPO_DIR/$destname"
+    echo -e "${GREEN}  ✓ Built: $destname${NC}"
     built=1
 done
 

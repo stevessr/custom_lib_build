@@ -83,9 +83,26 @@ arch_lib/
 ├── .github/workflows/
 │   └── build-repo.yaml        # GitHub Actions 工作流（matrix + release）
 ├── scripts/
-│   └── build-package.sh      # 单包构建脚本（含 -git 跳过逻辑）
+│   ├── build-package.sh      # 单包构建脚本（含 -git 跳过逻辑）
+│   └── pre-build/            # 包级预构建钩子（可选）
+│       └── qoder-cli.sh      # 示例：修复安装脚本行为异常的包
 ├── packages.txt              # 要构建的 AUR 包列表
 └── README.md
+```
+
+## 预构建钩子（Pre-build hooks）
+
+某些 AUR 包的 PKGBUILD 有 bug（如安装脚本依赖当前目录、缺失编译依赖等）。
+可以在 `scripts/pre-build/<包名>.sh` 添加钩子，在 `makepkg` 前执行：
+
+```bash
+#!/bin/bash
+# scripts/pre-build/<包名>.sh
+# 参数：$1=包目录  $2=包名
+PKG_DIR="$1"
+echo "自定义构建准备..."
+# 例如：预下载缺失的二进制
+# curl -fsSL https://example.com/binary -o "$PKG_DIR/src/binary"
 ```
 
 ## Release 产物结构
