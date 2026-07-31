@@ -57,8 +57,8 @@ fi
 GHARGS=()
 [ -n "$REPO" ] && GHARGS+=(-R "$REPO")
 
-# 从文件读入私钥写入 Secret
-gpg --batch --armor --export-secret-keys "$FPR" | gh secret set GPG_PRIVATE_KEY "${GHARGS[@]}" --body -
+# 从文件读入私钥写入 Secret（不传 --body，自动从 stdin 读取）
+gpg --batch --armor --export-secret-keys "$FPR" | gh secret set GPG_PRIVATE_KEY "${GHARGS[@]}"
 echo "✔ Secret 已添加: GPG_PRIVATE_KEY"
 
 # ── 提交公钥 ────────────────────────────────────────────────────────
