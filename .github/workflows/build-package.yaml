@@ -158,7 +158,6 @@ jobs:
             repos/x86_64/*.pkg.tar.zst
             repos/x86_64/*.sig
             repos/x86_64/version.txt
-            arch_lib.pub.asc
           overwrite: true
           fail_on_unmatched_files: false
 

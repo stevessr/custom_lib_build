@@ -24,7 +24,7 @@ packages.txt ──▶ prepare ──▶ build (matrix, 调 build-package.yaml)
 
 1. **prepare** — 解析 `packages.txt` 生成 matrix
 2. **build** — 每个包并行构建（可复用工作流 `build-package.yaml`），直接上传到自己的 Release（tag = 包名，覆盖更新）；`-git` 包先检查上游 commit hash，未变则跳过
-3. **publish** — 从每个包的 Release 下载产物，`repo-add` 生成 pacman 仓库数据库，上传数据库及公钥到 `latest` Release（不重复包含软件包构建产物）；完成后自动触发 GC 清理同一个软件包的老旧 Release
+3. **publish** — 从每个包的 Release 下载产物，`repo-add` 生成 pacman 仓库数据库，上传数据库、公钥及**当前版本的包文件**（扁平）到 `latest` Release，使 `Server = …/releases/download/latest` 能同时取到 db 和包；完成后自动触发 GC 清理同一个软件包的老旧 Release
 
 ## 快速开始
 
@@ -194,15 +194,15 @@ arch_lib/
 
 ## Release 产物结构
 
-**汇总仓库**（tag = `latest`）— pacman 数据库及公钥（构建产物已放在各软件包单独 Release 中，无需重复包含）：
+**汇总仓库**（tag = `latest`）— pacman 数据库、公钥及**当前版本的所有包文件**（扁平，供 `Server = …/releases/download/latest` 直接安装；每次发布先删旧建新，不累积旧版本）：
 
 ```
 latest/
-├── arch_lib.db.tar.gz           # pacman 仓库数据库
-├── arch_lib.db
-├── arch_lib.files.tar.gz
-├── arch_lib.files
-└── arch_lib.pub.asc             # GPG 签名公钥
+├── arch_lib.db / arch_lib.db.tar.gz   # pacman 仓库数据库
+├── arch_lib.files / arch_lib.files.tar.gz
+├── arch_lib.pub.asc                   # GPG 签名公钥
+├── <pkg>-<ver>-x86_64.pkg.tar.zst     # 当前版本包（含 .sig）
+└── …
 ```
 
 **单包 Release**（tag = 包名）— 单独分发：
