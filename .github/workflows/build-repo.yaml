@@ -149,7 +149,7 @@ jobs:
         run: |
           cd repos/x86_64
 
-          PKG_COUNT=$(ls -1 *.pkg.tar.* 2>/dev/null | wc -l || true)
+          PKG_COUNT=$(ls -1 *.pkg.tar.zst 2>/dev/null | wc -l || true)
           echo "Packages in repo: $PKG_COUNT"
           if [ "$PKG_COUNT" -eq 0 ]; then
             echo "No packages — aborting"
@@ -158,11 +158,15 @@ jobs:
 
           rm -f arch_lib.db.tar.gz arch_lib.db arch_lib.files.tar.gz arch_lib.files
 
+          # Only pass .zst files to repo-add: the *.pkg.tar.* glob would also
+          # match the .sig files generated above, and repo-add would try to
+          # parse each signature as a package (bsdtar: Unrecognized archive
+          # format). repo-add picks up sibling .sig files automatically.
           if [ -n "${KEY_ID:-}" ]; then
             echo "Signing repository database with $KEY_ID"
-            GPGKEY="$KEY_ID" repo-add --remove --new --sign arch_lib.db.tar.gz ./*.pkg.tar.*
+            GPGKEY="$KEY_ID" repo-add --remove --new --sign arch_lib.db.tar.gz ./*.pkg.tar.zst
           else
-            repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.*
+            repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.zst
           fi
 
           # Real copies (not symlinks) — GitHub Release assets are flat,
