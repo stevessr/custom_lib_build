@@ -24,7 +24,7 @@ packages.txt ──▶ prepare ──▶ build (matrix, 调 build-package.yaml)
 
 1. **prepare** — 解析 `packages.txt` 生成 matrix
 2. **build** — 每个包并行构建（可复用工作流 `build-package.yaml`），直接上传到自己的 Release（tag = 包名，覆盖更新）；`-git` 包先检查上游 commit hash，未变则跳过
-3. **publish** — 从每个包的 Release 下载产物，`repo-add` 生成 pacman 仓库数据库，上传到 `latest` Release（汇总仓库）
+3. **publish** — 从每个包的 Release 下载产物，`repo-add` 生成 pacman 仓库数据库，上传数据库及公钥到 `latest` Release（不重复包含软件包构建产物）；完成后自动触发 GC 清理同一个软件包的老旧 Release
 
 ## 快速开始
 
@@ -180,10 +180,10 @@ arch_lib/
 │   ├── build-keyring.yaml     # 构建 custom-keyring 密钥环包
 │   └── manual-build.yaml      # 手动触发单包构建
 ├── scripts/
-│   ├── build-package.sh      # 单包构建脚本（含 -git 跳过逻辑 + custom PKGBUILD）
+│   ├── build-package.sh       # 单包构建脚本（含 -git 跳过逻辑 + custom PKGBUILD）
 │   ├── generate-signing-key.sh # 一键生成签名密钥（自动导入 pacman 密钥环）
-│   └── pre-build/            # 包级预构建钩子（可选）
-│       └── qoder-cli.sh      # 示例：修复安装脚本行为异常的包
+│   ├── gc-releases.sh         # 自动 GC 清理老旧/重复软件包 Release 脚本
+│   └── pre-build/             # 包级预构建钩子（可选）
 ├── custom-pkgs/              # 自定义 PKGBUILD（优先于 AUR）
 │   ├── claude-code/PKGBUILD  # 从 CometixSpace/claude-code Release 下载
 │   └── cscience-bin/PKGBUILD # 从 Haleclipse/cscience Release 下载（原生 Bun）
@@ -194,7 +194,7 @@ arch_lib/
 
 ## Release 产物结构
 
-**汇总仓库**（tag = `latest`）— pacman 直接使用：
+**汇总仓库**（tag = `latest`）— pacman 数据库及公钥（构建产物已放在各软件包单独 Release 中，无需重复包含）：
 
 ```
 latest/
@@ -202,7 +202,7 @@ latest/
 ├── arch_lib.db
 ├── arch_lib.files.tar.gz
 ├── arch_lib.files
-└── *.pkg.tar.zst                # 所有包的产物
+└── arch_lib.pub.asc             # GPG 签名公钥
 ```
 
 **单包 Release**（tag = 包名）— 单独分发：

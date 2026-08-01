@@ -235,11 +235,21 @@ jobs:
           name: ${{ steps.release-name.outputs.value }}
           body_path: release-body.md
           files: |
-            repos/x86_64/*.pkg.tar.zst
-            repos/x86_64/*.sig
             repos/x86_64/arch_lib.db
+            repos/x86_64/arch_lib.db.sig
             repos/x86_64/arch_lib.db.tar.gz
+            repos/x86_64/arch_lib.db.tar.gz.sig
             repos/x86_64/arch_lib.files
+            repos/x86_64/arch_lib.files.sig
             repos/x86_64/arch_lib.files.tar.gz
+            repos/x86_64/arch_lib.files.tar.gz.sig
             arch_lib.pub.asc
           fail_on_unmatched_files: false
+
+      # ── Garbage collection for old package releases ───────────────
+      - name: Garbage collect old package releases
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/gc-releases.sh

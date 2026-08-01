@@ -161,3 +161,11 @@ jobs:
             arch_lib.pub.asc
           overwrite: true
           fail_on_unmatched_files: false
+
+      # ── Automatic GC: clean up old releases of this package ───────
+      - name: Clean up old releases of ${{ inputs.package }}
+        if: steps.result.outputs.skipped != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/gc-releases.sh "${{ inputs.package }}"
