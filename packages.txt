@@ -5,65 +5,85 @@
 # These packages will be built daily via GitHub Actions and
 # served as a pacman-compatible repository.
 
-# AUR helpers
-# yay
-# paru
-
-# Kernel / drivers
-# linux-xanmod
-# nvidia-all
-
-# Desktop / WM
-# hyprland-nvidia
-# nwg-shell
-# waybar-git
-
-# Fonts
-# ttf-jetbrains-mono-nerd
-# siji-git
-
-# Utilities
-# apfs-fuse-git
-# bamboo-core
-# bibata-cursor-theme
-# catppuccin-gtk-theme-mocha
-android-sdk-build-tools
-android-sdk-platform-tools
-antigravity
-autocorrect-bin
-cherry-studio-bin
-greetd-dms-greeter-bin
-hexecute
-jdk21-graalvm-bin
-jdk25-graalvm-bin
-kiro-cli
-kiro-ide
-linuxqq
-qbittorrent-enhanced
-rtk-bin
+# timing
 stayfree-desktop
-sparkle-bin
+
+# small tools
 vicinae-bin
-visual-studio-code-bin
+rtk-bin
+autocorrect-bin
+hexecute
+qbittorrent-enhanced
+
+# Lifeboat?
 warp-plus-bin
-wechat-bin
+sparkle-bin
+
+# Editor
+visual-studio-code-bin
+
+
+# fonts
 wps-office-fonts
 
-openai-codex-bin
-qoder-cli
+# Tencent
+linuxqq
+wechat-bin
 
-pi-coding-agent
+
+# Coding Language
 flutter-bin
+jdk21-graalvm-bin
+jdk25-graalvm-bin
+android-sdk-build-tools
+android-sdk-platform-tools
 
 ngrok
+
+# Jetbrains
 rustrover
 rustrover-jre
 
+# package manager
 spack
+vite-plus
+
+# Vibe Coding
+## third party
 ccline-bin
 cc-switch-bin
 claude-desktop
+pi-coding-agent
+cherry-studio-bin
+
+## remote
 paseo-desktop-bin
+
+## Google
+antigravity
+
+## openAI
+openai-codex-bin
+
+## Alibaba
+qoder-cli
+
+## Github
+github-copilot-cli-bin
+
+## AWS
+kiro-cli
+kiro-ide
+
+
+
+# niri
+greetd-dms-greeter-bin
+
+## noctalia
+noctalia
+noctalia-greeter
+sddm-theme-noctalia-git
 
 # Custom PKGBUILD (GitHub release 原生构建，见 custom-pkgs/ 目录)
 claude-code
