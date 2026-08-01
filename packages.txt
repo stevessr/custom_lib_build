@@ -14,6 +14,7 @@ rtk-bin
 autocorrect-bin
 hexecute
 qbittorrent-enhanced
+herdr-bin
 
 # Lifeboat?
 warp-plus-bin
