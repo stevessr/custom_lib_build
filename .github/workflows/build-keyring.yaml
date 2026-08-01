@@ -38,7 +38,7 @@ jobs:
       - name: Initialize Arch system
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel git sudo
+          pacman -S --noconfirm --needed base-devel git sudo jq
 
       - name: Setup builder user
         run: |
@@ -55,11 +55,11 @@ jobs:
           mkdir -p /tmp/keyring-build
           cd /tmp/keyring-build
 
-          # Prefer the key published on the latest release
-          gh release download latest \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "arch_lib.pub.asc" \
-            --dir . --clobber 2>/dev/null || true
+          # Prefer the key published on the latest release (deterministic
+          # asset URL, no gh CLI needed in this container)
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/latest/arch_lib.pub.asc" \
+            -o arch_lib.pub.asc 2>/dev/null || true
 
           # Fall back to the key committed in the repo source
           if [ ! -s arch_lib.pub.asc ]; then
@@ -124,22 +124,39 @@ jobs:
           ls -lh *.pkg.tar.*
 
       # ── Publish to custom-keyring release ─────────────────────────
-      - name: Publish to release custom-keyring
+      # gh CLI is not available in this container — stage files into the
+      # workspace, delete the old release via the REST API, then let
+      # softprops/action-gh-release (GitHub's own action) create/upload.
+      - name: Stage keyring package
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/keyring-release"
+          cp /tmp/keyring-build/*.pkg.tar.* "$GITHUB_WORKSPACE/keyring-release/" 2>/dev/null || true
+          ls -lh "$GITHUB_WORKSPACE/keyring-release/"
+
+      - name: Delete previous custom-keyring release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd /tmp/keyring-build
+          rid=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/custom-keyring" \
+            | jq -r '.id // empty' 2>/dev/null)
+          if [ -n "$rid" ]; then
+            echo "Deleting old release #$rid"
+            curl -fsSL -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$rid"
+          fi
+          # Drop the tag too so the release below starts clean
+          curl -fsSL -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/refs/tags/custom-keyring" || true
 
-          FILES=()
-          for f in *.pkg.tar.* *.pkg.tar.*.sig; do
-            [ -f "$f" ] && FILES+=("$f")
-          done
-
-          gh release delete custom-keyring \
-            --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
-
-          gh release create custom-keyring \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "custom-keyring $(date -u +%Y-%m-%d)" \
-            --notes "arch_lib 仓库签名密钥环包。安装: sudo pacman -U custom-keyring-*.pkg.tar.zst && sudo pacman-key --populate arch_lib。之后 pacman.conf 使用 SigLevel = Required DatabaseOptional。" \
-            "${FILES[@]}" || true
+      - name: Publish to release custom-keyring
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: custom-keyring
+          name: custom-keyring
+          body: |
+            arch_lib 仓库签名密钥环包。安装: sudo pacman -U custom-keyring-*.pkg.tar.zst && sudo pacman-key --populate arch_lib。之后 pacman.conf 使用 SigLevel = Required DatabaseOptional。
+          files: keyring-release/*.pkg.tar.*
+          fail_on_unmatched_files: false

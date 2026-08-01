@@ -71,7 +71,7 @@ jobs:
       - name: Initialize Arch system
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel gnupg pacman-contrib
+          pacman -S --noconfirm --needed base-devel gnupg pacman-contrib jq
 
       - name: Import signing key
         env:
@@ -103,16 +103,21 @@ jobs:
 
           for pkg in "${pkgs[@]}"; do
             echo "--- Downloading: $pkg ---"
-            # Download only package files (skip .sig and version.txt here;
+            # Query the release API for package assets (skip .sig here;
             # .sig files are re-generated below if signing is configured)
-            if gh release download "$pkg" \
-                --repo "$GITHUB_REPOSITORY" \
-                --pattern '*.pkg.tar.zst' \
-                --dir "repos/x86_64" --clobber 2>/dev/null; then
-              echo "  ✓ $pkg package downloaded"
-            else
+            assets=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$pkg" \
+              | jq -r '.assets[]?.browser_download_url | select(test("\\.pkg\\.tar\\.zst$"))' 2>/dev/null || true)
+            if [ -z "$assets" ]; then
               echo "  ⚠ $pkg has no release yet (build skipped/failed?)"
+              continue
             fi
+            while IFS= read -r url; do
+              [ -n "$url" ] || continue
+              echo "  ↓ $(basename "$url")"
+              curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+                -o "repos/x86_64/$(basename "$url")" "$url"
+            done <<< "$assets"
           done
 
           echo "--- Collected packages ---"
@@ -173,35 +178,32 @@ jobs:
           ls -lh
 
       # ── Upload combined repo to `latest` Release ───────────────────
+      # gh CLI is not available in this container — use curl + the REST
+      # API to delete, then the softprops action to create/upload.
       - name: Delete previous latest release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          # Delete the old release (lookup by tag), then the tag itself
+          # so the fresh release below starts clean
+          rid=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/latest" \
+            | jq -r '.id // empty' 2>/dev/null)
+          if [ -n "$rid" ]; then
+            echo "Deleting old latest release #$rid"
+            curl -fsSL -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$rid"
+          fi
+          curl -fsSL -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/refs/tags/latest" || true
 
       - name: Compute release name
         id: release-name
         run: |
           echo "value=Arch Lib Repository $(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
-      - name: Create new Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Write release body
         run: |
-          # Build the file list dynamically
-          FILES=()
-          for f in repos/x86_64/*.pkg.tar.zst \
-                   repos/x86_64/*.pkg.tar.zst.sig \
-                   repos/x86_64/arch_lib.db.tar.gz repos/x86_64/arch_lib.db \
-                   repos/x86_64/arch_lib.db.tar.gz.sig repos/x86_64/arch_lib.db.sig \
-                   repos/x86_64/arch_lib.files.tar.gz repos/x86_64/arch_lib.files \
-                   repos/x86_64/arch_lib.files.tar.gz.sig repos/x86_64/arch_lib.files.sig; do
-            [ -f "$f" ] && FILES+=("$f")
-          done
-          # 公钥随汇总仓库发布
-          FILES+=("$GITHUB_WORKSPACE/arch_lib.pub.asc")
-
-          # Body for the release
           cat > release-body.md <<EOF
           ## arch_lib pacman repository
 
@@ -220,8 +222,24 @@ jobs:
           导入公钥后可改用 \`SigLevel = Required DatabaseOptional\` 验证。
           EOF
 
-          gh release create latest \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "${{ steps.release-name.outputs.value }}" \
-            --notes-file release-body.md \
-            "${FILES[@]}" || true
+      # softprops/action-gh-release = GitHub's own release action (JS,
+      # no gh CLI needed in the container). Globs that match nothing are
+      # ignored (fail_on_unmatched_files: false), so unsigned builds
+      # (no .sig files) still publish.
+      - name: Create new Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: latest
+          name: ${{ steps.release-name.outputs.value }}
+          body_path: release-body.md
+          files: |
+            repos/x86_64/*.pkg.tar.zst
+            repos/x86_64/*.sig
+            repos/x86_64/arch_lib.db
+            repos/x86_64/arch_lib.db.tar.gz
+            repos/x86_64/arch_lib.files
+            repos/x86_64/arch_lib.files.tar.gz
+            arch_lib.pub.asc
+          fail_on_unmatched_files: false
