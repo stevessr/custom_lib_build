@@ -1,23 +1,17 @@
 # =============================================================================
-# Reusable: build a single AUR package and publish to its own Release
+# Reusable: build a single AUR package and upload a workflow artifact
 #
 # Called by:
 #   - build-repo.yaml   (matrix, daily cron)
 #   - manual-build.yaml (workflow_dispatch)
 #
-# Inputs:
-#   package  — AUR package name (also used as the GitHub Release tag)
-#   signing  — 'true' to sign packages with the GPG_PRIVATE_KEY secret
+# The build job does not publish a per-package Release. It uploads package
+# files plus version/manifest metadata as an Actions artifact; the publish
+# job combines every artifact into the `latest` pacman repository Release.
 #
-# Release tag = package name. Each run overwrites the previous release.
-# Release assets:
-#   <pkg>.pkg.tar.zst        — built package
-#   <pkg>.pkg.tar.zst.sig    — GPG signature (if signing enabled)
-#   version.txt              — last built version (used for -git skip check)
-#
-# -git packages: upstream commit hash (git ls-remote) is compared against
-# version.txt from the previous release; unchanged → skip build, old
-# release is left in place.
+# -git packages: upstream commit (git ls-remote) is compared against the
+# version metadata from the previous `latest` Release; unchanged packages
+# download their previous files from `latest` and upload them again.
 # =============================================================================
 
 name: Build Package
@@ -28,13 +22,6 @@ on:
       package:
         required: true
         type: string
-      signing:
-        required: false
-        default: 'true'
-        type: string
-    secrets:
-      GPG_PRIVATE_KEY:
-        required: false
 
 permissions:
   contents: write
@@ -61,22 +48,32 @@ jobs:
           mkdir -p /home/builder/.cache/aur-sources /tmp/aur-build
           chown -R builder:builder /home/builder /tmp/aur-build
 
-      # ── Version tracking: fetch previous version from own release ──
-      - name: Fetch previous version from release
+      # ── Version tracking: fetch metadata from `latest` ─────────────
+      - name: Fetch previous metadata from latest
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Asset URL is deterministic: /releases/download/<tag>/<name>
-          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-            "https://github.com/$GITHUB_REPOSITORY/releases/download/${{ inputs.package }}/version.txt" \
-            -o version.txt 2>/dev/null || true
-          if [ -s version.txt ]; then
-            ver=$(cat version.txt)
-            echo "${{ inputs.package }}=${ver}" > last-versions.txt
+          package="${{ inputs.package }}"
+          base_url="https://github.com/$GITHUB_REPOSITORY/releases/download/latest"
+          version_file="$GITHUB_WORKSPACE/version-${package}.txt"
+          manifest_file="$GITHUB_WORKSPACE/manifest-${package}.txt"
+          rm -f "$version_file" "$manifest_file" "$GITHUB_WORKSPACE/last-versions.txt"
+
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$base_url/$(basename "$version_file")" -o "$version_file" 2>/dev/null || true
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$base_url/$(basename "$manifest_file")" -o "$manifest_file" 2>/dev/null || true
+
+          if [ -s "$version_file" ] && [ -s "$manifest_file" ]; then
+            ver=$(cat "$version_file")
+            echo "${package}=${ver}" > "$GITHUB_WORKSPACE/last-versions.txt"
             echo "Previous version: $ver"
           else
-            touch last-versions.txt
-            echo "No previous version — will build"
+            rm -f "$version_file" "$manifest_file"
+            : > "$GITHUB_WORKSPACE/last-versions.txt"
+            echo "No complete metadata in latest — will build"
           fi
 
       - name: Cache AUR sources
@@ -113,59 +110,79 @@ jobs:
             echo "skipped=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── Sign package (if signing key configured) ───────────────────
-      - name: Sign package
-        if: steps.result.outputs.skipped != 'true' && inputs.signing == 'true'
+      # ── Reuse skipped package files from latest ────────────────────
+      - name: Reuse skipped package from latest
+        if: steps.result.outputs.skipped == 'true'
         env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -n "$GPG_PRIVATE_KEY" ]; then
-            printf '%s\n' "$GPG_PRIVATE_KEY" > /tmp/gpg-key.asc
-            gpg --batch --import /tmp/gpg-key.asc
-            rm -f /tmp/gpg-key.asc
-            for f in repos/x86_64/*.pkg.tar.*; do
-              [ -f "$f" ] || continue
-              echo "Signing: $f"
-              gpg --batch --yes --detach-sign "$f"
-            done
-          else
-            echo "No GPG_PRIVATE_KEY secret — package unsigned"
+          package="${{ inputs.package }}"
+          base_url="https://github.com/$GITHUB_REPOSITORY/releases/download/latest"
+          manifest="$GITHUB_WORKSPACE/manifest-${package}.txt"
+          repo_dir="$GITHUB_WORKSPACE/repos/x86_64"
+
+          if [ ! -s "$manifest" ]; then
+            echo "No manifest for skipped package $package in latest"
+            exit 1
           fi
 
-      # ── Upload directly to this package's release ──────────────────
-      - name: Stage upload files
-        if: steps.result.outputs.skipped != 'true'
+          mkdir -p "$repo_dir"
+          while IFS= read -r filename; do
+            [ -n "$filename" ] || continue
+            case "$filename" in
+              *.pkg.tar.zst) ;;
+              *) echo "Invalid package filename in manifest: $filename"; exit 1 ;;
+            esac
+            case "$filename" in
+              */*|*..*) echo "Unsafe package filename in manifest: $filename"; exit 1 ;;
+            esac
+
+            dest="$repo_dir/$filename"
+            partial="${dest}.part"
+            echo "  ↓ $filename (resumable)"
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              --continue-at - -H "Authorization: Bearer $GH_TOKEN" \
+              -o "$partial" "$base_url/$filename"
+            mv -f "$partial" "$dest"
+          done < "$manifest"
+
+          if ! compgen -G "$repo_dir/*.pkg.tar.zst" >/dev/null; then
+            echo "No package files restored for $package"
+            exit 1
+          fi
+
+      # ── Stage package artifact for the publish job ─────────────────
+      - name: Stage package artifact
         run: |
-          # Write version.txt asset for next run's -git skip check
-          echo "${{ steps.result.outputs.version }}" > version.txt
-          cp version.txt repos/x86_64/ 2>/dev/null || true
+          package="${{ inputs.package }}"
+          repo_dir="$GITHUB_WORKSPACE/repos/x86_64"
+          artifact_dir="$GITHUB_WORKSPACE/package-artifact"
+          version_file="$GITHUB_WORKSPACE/version-${package}.txt"
+          manifest_file="$GITHUB_WORKSPACE/manifest-${package}.txt"
 
-          echo "Packages to upload:"
-          ls -lh repos/x86_64/
+          rm -rf "$artifact_dir"
+          mkdir -p "$artifact_dir"
+          mapfile -t package_files < <(
+            find "$repo_dir" -maxdepth 1 -type f -name '*.pkg.tar.zst' -printf '%f\n' | sort
+          )
+          if [ "${#package_files[@]}" -eq 0 ]; then
+            echo "No package files available for $package"
+            exit 1
+          fi
 
-      # softprops/action-gh-release = GitHub's own release action (JS,
-      # no gh CLI needed in the container). Creates the release on first
-      # run, updates + overwrites assets on re-runs.
-      - name: Publish to release ${{ inputs.package }}
-        if: steps.result.outputs.skipped != 'true'
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          printf '%s\n' "${package_files[@]}" > "$manifest_file"
+          printf '%s\n' "${{ steps.result.outputs.version }}" > "$version_file"
+          for filename in "${package_files[@]}"; do
+            cp "$repo_dir/$filename" "$artifact_dir/"
+          done
+          cp "$version_file" "$manifest_file" "$artifact_dir/"
+          echo "Package artifact contents:"
+          ls -lh "$artifact_dir"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ inputs.package }}
-          name: ${{ inputs.package }} ${{ steps.result.outputs.version }}
-          body: Auto-built from AUR via GitHub Actions
-          files: |
-            repos/x86_64/*.pkg.tar.zst
-            repos/x86_64/*.sig
-            repos/x86_64/version.txt
-          overwrite: true
-          fail_on_unmatched_files: false
-
-      # ── Automatic GC: clean up old releases of this package ───────
-      - name: Clean up old releases of ${{ inputs.package }}
-        if: steps.result.outputs.skipped != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          bash scripts/gc-releases.sh "${{ inputs.package }}"
+          name: package-${{ inputs.package }}
+          path: package-artifact
+          compression-level: 0
+          if-no-files-found: error

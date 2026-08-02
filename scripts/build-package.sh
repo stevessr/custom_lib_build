@@ -9,10 +9,9 @@
 #                        query the upstream HEAD commit via `git ls-remote`.
 #                        That commit hash is compared against the last
 #                        recorded one — no source download, no build.
-#
 # Skip logic: if version == last recorded version, exit 0 without building.
-# The publish job reuses the old .pkg.tar.* from the previous release.
-#
+# The build workflow reuses old package files from the previous `latest`
+# Release when a package is skipped.
 # Usage:
 #   build-package.sh <pkg> <output-file>
 #

@@ -1,12 +1,12 @@
 # arch_lib
 
-将 AUR 包转换为可直接安装的 Arch Linux 二进制包，每个包独立发布到 GitHub Release，使用 GitHub Actions 每日自动更新。
+将 AUR 包转换为可直接安装的 Arch Linux 二进制包，所有包集中发布到 GitHub Release 的 `latest` 版本，使用 GitHub Actions 每日自动更新。
 
 ## 特性
 
 - **Matrix 并行构建** — 每个包独立 job，并行加速，互不影响
 - **`-git` 包跳过** — 通过 `git ls-remote` 查询上游 HEAD commit hash，未变则跳过构建
-- **每包独立 Release** — 每个包有自己的 Release tag（包名），每次构建覆盖更新
+- **统一 pacman Release** — 所有当前包文件、签名和数据库集中在 `latest` Release
 - **GPG 签名可选** — 支持对包进行签名，配置后自动生成 `.sig`
 - **产物体积保护** — 使用 zstd level 19 压缩 `.pkg.tar.zst`，并在上传前拒绝超过 GitHub Release 单资产上限的包
 - **每日自动更新** — UTC 00:00 定时运行，也可手动触发
@@ -15,17 +15,18 @@
 
 ```
 packages.txt ──▶ prepare ──▶ build (matrix, 调 build-package.yaml)
-                              ├── flutter-bin ──▶ Release flutter-bin
-                              ├── yay          ──▶ Release yay
-                              └── ...          ──▶ Release ...
+                              ├── flutter-bin ──▶ Actions artifact
+                              ├── yay          ──▶ Actions artifact
+                              └── ...          ──▶ Actions artifact
                                               │
                                               ▼
-                              publish ──▶ repo-add ──▶ Release latest (汇总数据库)
+                              publish ──▶ repo-add ──▶ Release latest
 ```
 
 1. **prepare** — 解析 `packages.txt` 生成 matrix
-2. **build** — 每个包并行构建（可复用工作流 `build-package.yaml`），直接上传到自己的 Release（tag = 包名，覆盖更新）；`-git` 包先检查上游 commit hash，未变则跳过
-3. **publish** — 从每个包的 Release 以重试和断点续传方式下载产物，`repo-add` 生成 pacman 仓库数据库，上传数据库、公钥及**当前版本的包文件**（扁平）到 `latest` Release，使 `Server = …/releases/download/latest` 能同时取到 db 和包；完成后自动触发 GC 清理同一个软件包的老旧 Release
+2. **build** — 每个包并行构建并上传 Actions artifact；`-git` 包先检查上一次 `latest` 的元数据，未变则复用旧包
+3. **publish** — 下载所有 artifact，`repo-add` 生成 pacman 仓库数据库，上传数据库、公钥、元数据及当前版本包文件到 `latest` Release
+
 
 ## 快速开始
 
@@ -80,11 +81,11 @@ sudo pacman -S 包名
 
 **方式二：单独下载某个包**
 
-每个包在 Releases 页面有独立 Release（tag = 包名）：
+所有包文件也在 `latest` Release 中：
 
 ```bash
-gh release download yay --repo 你的用户名/arch_lib --pattern '*.pkg.tar.zst'
-sudo pacman -U *.pkg.tar.zst
+gh release download latest --repo 你的用户名/arch_lib --pattern '包名-*.pkg.tar.zst'
+sudo pacman -U 包名-*.pkg.tar.zst
 ```
 
 ## `-git` 包跳过逻辑
@@ -93,9 +94,9 @@ sudo pacman -U *.pkg.tar.zst
 
 1. 克隆 AUR 仓库（仅 PKGBUILD），提取其中的 `git+` 源码 URL
 2. 通过 `git ls-remote` 查询上游仓库当前 HEAD 的 commit hash
-3. 从该包的上一个 Release 下载 `version.txt` 对比
-4. 如果相同 → **跳过构建**，旧 Release 保持不变
-5. 如果不同 → 正常构建，发布新版本
+3. 从 `latest` Release 下载 `version-<包名>.txt` 和 `manifest-<包名>.txt`
+4. 如果相同 → **跳过构建**，从 `latest` 复用清单中的旧包
+5. 如果不同 → 正常构建并上传新的 Actions artifact
 
 **不下载源码、不编译**，只做一次轻量远程查询，非常适合每日定时任务。
 
@@ -177,21 +178,18 @@ GitHub Release 的单个资产约有 2 GiB 上限。脚本默认用 `MAX_RELEASE
 
 ## 手动触发构建
 
-在 GitHub 仓库的 **Actions → Build AUR Repository → Run workflow** 中可随时手动触发。
-
-## 文件结构
-
+在 GitHub 仓库的 **Actions → Build AUR Repository → Run workflow** 中可随时手动触发完整构建并更新 `latest`。`Manual Build Package` 仅生成单包 Actions artifact，不会创建独立软件包 Release。
 ```
 arch_lib/
 ├── .github/workflows/
 │   ├── build-repo.yaml        # 调度器：prepare + matrix + publish 汇总
-│   ├── build-package.yaml     # 可复用：单包构建 + 上传到包名 Release
+│   ├── build-package.yaml     # 可复用：单包构建 + 上传 Actions artifact
 │   ├── build-keyring.yaml     # 构建 custom-keyring 密钥环包
 │   └── manual-build.yaml      # 手动触发单包构建
 ├── scripts/
 │   ├── build-package.sh       # 单包构建脚本（含 -git 跳过逻辑 + custom PKGBUILD）
 │   ├── generate-signing-key.sh # 一键生成签名密钥（自动导入 pacman 密钥环）
-│   ├── gc-releases.sh         # 自动 GC 清理老旧/重复软件包 Release 脚本
+│   ├── gc-releases.sh         # 旧包 Release 清理工具（迁移后不再自动调用）
 │   └── pre-build/             # 包级预构建钩子（可选）
 ├── custom-pkgs/              # 自定义 PKGBUILD（优先于 AUR）
 │   ├── claude-code/PKGBUILD  # 从 CometixSpace/claude-code Release 下载
@@ -201,9 +199,7 @@ arch_lib/
 └── README.md
 ```
 
-## Release 产物结构
-
-**汇总仓库**（tag = `latest`）— pacman 数据库、公钥及**当前版本的所有包文件**（扁平，供 `Server = …/releases/download/latest` 直接安装；每次发布先删旧建新，不累积旧版本）：
+**汇总仓库**（tag = `latest`）— pacman 数据库、公钥、元数据及**当前版本的所有包文件**（扁平，供 `Server = …/releases/download/latest` 直接安装；每次发布先删旧建新，不累积旧版本）：
 
 ```
 latest/
@@ -211,17 +207,12 @@ latest/
 ├── arch_lib.files / arch_lib.files.tar.gz
 ├── arch_lib.pub.asc                   # GPG 签名公钥
 ├── <pkg>-<ver>-x86_64.pkg.tar.zst     # 当前版本包（含 .sig）
+├── version-<pkg>.txt                  # 上次版本/commit 记录
+├── manifest-<pkg>.txt                 # 该输入包对应的文件清单
 └── …
 ```
 
-**单包 Release**（tag = 包名）— 单独分发：
-
-```
-yay/
-├── yay-12.4.2-1-x86_64.pkg.tar.zst
-├── yay-12.4.2-1-x86_64.pkg.tar.zst.sig  # 如配置签名
-└── version.txt                  # 版本号（用于 -git 跳过检查）
-```
+不再为普通软件包创建或更新独立 Release；`latest` 是唯一的 pacman 软件包来源。`custom-keyring` 仍使用独立 Release，便于首次安装密钥环。
 
 ## 自定义
 

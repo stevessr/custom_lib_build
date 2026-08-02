@@ -10,14 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: 'AUR 包名（也是 Release tag）'
+        description: 'AUR 包名'
         required: true
         type: string
-      signing:
-        description: '是否签名（需要配置 GPG_PRIVATE_KEY）'
-        required: false
-        default: 'true'
-        type: boolean
 
 permissions:
   contents: write
@@ -27,6 +22,3 @@ jobs:
     uses: ./.github/workflows/build-package.yaml
     with:
       package: ${{ inputs.package }}
-      signing: ${{ inputs.signing && 'true' || 'false' }}
-    secrets:
-      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
