@@ -16,6 +16,7 @@ hexecute
 qbittorrent-enhanced
 herdr-bin
 libumem-git
+imagemagick-full
 
 # Lifeboat?
 warp-plus-bin
