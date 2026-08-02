@@ -1,4 +1,10 @@
-# arch_lib
+<p align="center">
+  <img src="assets/arch-lib-icon.png" alt="arch_lib 图标" width="160">
+</p>
+
+<h1 align="center">arch_lib</h1>
+
+<p align="center">面向 Arch Linux 的可直接安装二进制软件包仓库</p>
 
 将 AUR 包转换为可直接安装的 Arch Linux 二进制包，所有包集中发布到 GitHub Release 的 `latest` 版本，使用 GitHub Actions 每日自动更新。
 
@@ -191,6 +197,8 @@ arch_lib/
 │   ├── generate-signing-key.sh # 一键生成签名密钥（自动导入 pacman 密钥环）
 │   ├── gc-releases.sh         # 旧包 Release 清理工具（迁移后不再自动调用）
 │   └── pre-build/             # 包级预构建钩子（可选）
+├── assets/                    # 项目标识
+│   └── arch-lib-icon.png      # GitHub 仓库头像/社交预览用 PNG
 ├── custom-pkgs/              # 自定义 PKGBUILD（优先于 AUR）
 │   ├── claude-code/PKGBUILD  # 从 CometixSpace/claude-code Release 下载
 │   └── cscience-bin/PKGBUILD # 从 Haleclipse/cscience Release 下载（原生 Bun）
