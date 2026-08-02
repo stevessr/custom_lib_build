@@ -89,13 +89,14 @@ jobs:
 
       # ── Build (skips -git packages with unchanged commit) ──────────
       - name: Build package ${{ inputs.package }}
-        env:
-          REPO_DIR: "${{ github.workspace }}/repos/x86_64"
-          LAST_VERSIONS_FILE: "${{ github.workspace }}/last-versions.txt"
         run: |
           chown -R builder:builder "$GITHUB_WORKSPACE"
           cd "$GITHUB_WORKSPACE"
-          # -E: keep env (SRCDEST, REPO_DIR, LAST_VERSIONS_FILE), -H: HOME=/home/builder
+          # Container jobs must use the container-side path from
+          # $GITHUB_WORKSPACE, not the host-side github.workspace expression.
+          export REPO_DIR="$GITHUB_WORKSPACE/repos/x86_64"
+          export LAST_VERSIONS_FILE="$GITHUB_WORKSPACE/last-versions.txt"
+          # -E: keep env (including the paths above), -H: HOME=/home/builder
           sudo -EHu builder bash scripts/build-package.sh "${{ inputs.package }}"
 
       # ── Read build result ──────────────────────────────────────────

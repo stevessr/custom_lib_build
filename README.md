@@ -8,6 +8,7 @@
 - **`-git` 包跳过** — 通过 `git ls-remote` 查询上游 HEAD commit hash，未变则跳过构建
 - **每包独立 Release** — 每个包有自己的 Release tag（包名），每次构建覆盖更新
 - **GPG 签名可选** — 支持对包进行签名，配置后自动生成 `.sig`
+- **产物体积保护** — 使用 zstd level 19 压缩 `.pkg.tar.zst`，并在上传前拒绝超过 GitHub Release 单资产上限的包
 - **每日自动更新** — UTC 00:00 定时运行，也可手动触发
 
 ## 工作原理
@@ -24,7 +25,7 @@ packages.txt ──▶ prepare ──▶ build (matrix, 调 build-package.yaml)
 
 1. **prepare** — 解析 `packages.txt` 生成 matrix
 2. **build** — 每个包并行构建（可复用工作流 `build-package.yaml`），直接上传到自己的 Release（tag = 包名，覆盖更新）；`-git` 包先检查上游 commit hash，未变则跳过
-3. **publish** — 从每个包的 Release 下载产物，`repo-add` 生成 pacman 仓库数据库，上传数据库、公钥及**当前版本的包文件**（扁平）到 `latest` Release，使 `Server = …/releases/download/latest` 能同时取到 db 和包；完成后自动触发 GC 清理同一个软件包的老旧 Release
+3. **publish** — 从每个包的 Release 以重试和断点续传方式下载产物，`repo-add` 生成 pacman 仓库数据库，上传数据库、公钥及**当前版本的包文件**（扁平）到 `latest` Release，使 `Server = …/releases/download/latest` 能同时取到 db 和包；完成后自动触发 GC 清理同一个软件包的老旧 Release
 
 ## 快速开始
 
@@ -165,6 +166,14 @@ Server = https://你的用户名.github.io/arch_lib/releases/download/latest
 - `DatabaseOptional`：数据库签名可选（首次可先用 `DatabaseOptional`，后续改为 `Required`）
 
 未配置密钥的仓库（无 `.sig` 文件）请继续使用 `SigLevel = Optional TrustAll`。
+
+## 产物大小与大文件分发
+
+单包构建脚本会为它调用的每次 `makepkg` 生成临时配置，使用多线程 zstd level 19 压缩包文件。这样不会修改 runner 的 `/etc/makepkg.conf`，也不会覆盖用户已有的 makepkg 配置。需要在压缩时间和体积之间取舍时，可将 `PACKAGE_ZSTD_LEVEL` 设置为 1–19。
+
+GitHub Release 的单个资产约有 2 GiB 上限。脚本默认用 `MAX_RELEASE_ASSET_BYTES=2147483648` 做预检，超限会在上传前明确失败，而不是让 `softprops/action-gh-release` 在发布阶段失败。聚合仓库下载还启用了重试和断点续传，临时网络中断不会从头下载整个包。
+
+不要直接用 `split` 把 `.pkg.tar.zst` 拆成多个 Release 资产：pacman 和 `repo-add` 需要完整、原子性的包文件，分片不能直接安装。压缩后仍超限时，应在对应 PKGBUILD 中拆成多个 pacman split packages（`pkgname=(...)`，分别实现 `package_*()`），或移除不需要的内容；不要把不可安装的分片放进 `latest` 仓库。
 
 ## 手动触发构建
 

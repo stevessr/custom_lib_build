@@ -39,6 +39,23 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# Keep package assets below the GitHub Release per-asset limit. The
+# limit is configurable for self-hosted mirrors or stricter policies.
+MAX_RELEASE_ASSET_BYTES="${MAX_RELEASE_ASSET_BYTES:-2147483648}"
+
+# zstd level 19 is substantially smaller than Arch's default level 9 while
+# remaining within the normal (non-`--ultra`) zstd range.
+PACKAGE_ZSTD_LEVEL="${PACKAGE_ZSTD_LEVEL:-19}"
+if [[ ! "$PACKAGE_ZSTD_LEVEL" =~ ^([1-9]|1[0-9])$ ]]; then
+    echo -e "${RED}  ✗ PACKAGE_ZSTD_LEVEL must be an integer from 1 to 19${NC}"
+    exit 1
+fi
+
+if [[ ! "$MAX_RELEASE_ASSET_BYTES" =~ ^[1-9][0-9]*$ ]]; then
+    echo -e "${RED}  ✗ MAX_RELEASE_ASSET_BYTES must be a positive integer${NC}"
+    exit 1
+fi
+
 mkdir -p "$REPO_DIR" "$BUILD_DIR" "$SRC_CACHE"
 
 # ── Source: custom PKGBUILD or AUR? ────────────────────────────────
@@ -161,16 +178,53 @@ if [ -n "$last_ver" ] && [ "$current_ver" = "$last_ver" ]; then
 fi
 
 # ── Build the package ────────────────────────────────────────────────
-echo -e "${YELLOW}  Building $PKG ...${NC}"
-if ! makepkg -s --noconfirm --needed 2>&1 | sed 's/^/  /'; then
+echo -e "${YELLOW}  Building $PKG (zstd level $PACKAGE_ZSTD_LEVEL) ...${NC}"
+
+# Use a per-build config so the repository's compression policy does not
+# mutate the runner's /etc/makepkg.conf or any user-level configuration.
+MAKEPKG_CONFIG="$(mktemp "${TMPDIR:-/tmp}/makepkg.conf.XXXXXX")"
+trap 'rm -f "$MAKEPKG_CONFIG"' EXIT
+MAKEPKG_BASE_CONFIG="${MAKEPKG_CONF:-/etc/makepkg.conf}"
+if [ ! -r "$MAKEPKG_BASE_CONFIG" ]; then
+    echo -e "${RED}  ✗ makepkg config not readable: $MAKEPKG_BASE_CONFIG${NC}"
+    exit 1
+fi
+cp "$MAKEPKG_BASE_CONFIG" "$MAKEPKG_CONFIG"
+printf '\n# arch_lib package-size policy\nPKGEXT=.pkg.tar.zst\nCOMPRESSZST=(zstd -c -T0 -%s -)\n' \
+    "$PACKAGE_ZSTD_LEVEL" >> "$MAKEPKG_CONFIG"
+
+if ! makepkg --config "$MAKEPKG_CONFIG" -s --noconfirm --needed 2>&1 | sed 's/^/  /'; then
     echo -e "${RED}  ✗ Build failed for $PKG${NC}"
     exit 1
 fi
 
-# Copy built packages to repo dir
+# Validate every package before copying anything. A pacman package is an
+# atomic archive: blindly splitting the .pkg.tar.zst would make it unusable
+# by pacman and by repo-add. Oversized packages need a PKGBUILD-level split.
 shopt -s nullglob
-built=0
-for pkgfile in "$PKG_DIR"/*.pkg.tar.*; do
+built_files=()
+for pkgfile in "$PKG_DIR"/*.pkg.tar.zst; do
+    name=$(pacman -Qip "$pkgfile" 2>/dev/null | grep '^Name' | awk '{print $3}') || continue
+    [ -n "$name" ] || continue
+
+    artifact_size=$(stat -c '%s' "$pkgfile")
+    if (( artifact_size > MAX_RELEASE_ASSET_BYTES )); then
+        size_mib=$(( (artifact_size + 1048575) / 1048576 ))
+        limit_mib=$(( (MAX_RELEASE_ASSET_BYTES + 1048575) / 1048576 ))
+        echo -e "${RED}  ✗ $name is ${size_mib} MiB; GitHub Release limit is ${limit_mib} MiB${NC}"
+        echo "  Split the PKGBUILD into pacman split packages instead of splitting this archive."
+        exit 1
+    fi
+    built_files+=("$pkgfile")
+done
+
+if [ "${#built_files[@]}" -eq 0 ]; then
+    echo -e "${RED}  ✗ No package files produced${NC}"
+    exit 1
+fi
+
+# Copy built packages to repo dir after all size checks pass.
+for pkgfile in "${built_files[@]}"; do
     name=$(pacman -Qip "$pkgfile" 2>/dev/null | grep '^Name' | awk '{print $3}') || continue
     [ -n "$name" ] || continue
     # Remove any old version of the same package
@@ -179,14 +233,10 @@ for pkgfile in "$PKG_DIR"/*.pkg.tar.*; do
     # by GitHub artifact upload. Replace ':' with '_' everywhere.
     destname=$(basename "$pkgfile" | tr ':' '_')
     cp "$pkgfile" "$REPO_DIR/$destname"
-    echo -e "${GREEN}  ✓ Built: $destname${NC}"
-    built=1
+    artifact_size=$(stat -c '%s' "$pkgfile")
+    size_mib=$(( (artifact_size + 1048575) / 1048576 ))
+    echo -e "${GREEN}  ✓ Built: $destname (${size_mib} MiB)${NC}"
 done
-
-if [ "$built" -eq 0 ]; then
-    echo -e "${RED}  ✗ No package files produced${NC}"
-    exit 1
-fi
 
 echo "version=$current_ver" > "$PKG_OUTPUT"
 echo "skipped=false" >> "$PKG_OUTPUT"

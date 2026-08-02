@@ -105,7 +105,8 @@ jobs:
             echo "--- Downloading: $pkg ---"
             # Query the release API for package assets (skip .sig here;
             # .sig files are re-generated below if signing is configured)
-            assets=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            assets=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              -H "Authorization: Bearer $GH_TOKEN" \
               "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$pkg" \
               | jq -r '.assets[]?.browser_download_url | select(test("\\.pkg\\.tar\\.zst$"))' 2>/dev/null || true)
             if [ -z "$assets" ]; then
@@ -114,9 +115,15 @@ jobs:
             fi
             while IFS= read -r url; do
               [ -n "$url" ] || continue
-              echo "  ↓ $(basename "$url")"
-              curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-                -o "repos/x86_64/$(basename "$url")" "$url"
+              dest="repos/x86_64/$(basename "$url")"
+              partial="${dest}.part"
+              echo "  ↓ $(basename "$url") (resumable)"
+              # Keep a partial file so transient CDN/network failures can
+              # resume instead of restarting a multi-hundred-MiB download.
+              curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+                --continue-at - -H "Authorization: Bearer $GH_TOKEN" \
+                -o "$partial" "$url"
+              mv -f "$partial" "$dest"
             done <<< "$assets"
           done
 
