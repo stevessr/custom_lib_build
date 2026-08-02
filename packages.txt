@@ -15,7 +15,7 @@ autocorrect-bin
 hexecute
 qbittorrent-enhanced
 herdr-bin
-lib32-libumem-git
+libumem-git
 
 # Lifeboat?
 warp-plus-bin
