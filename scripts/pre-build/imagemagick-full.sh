@@ -35,13 +35,13 @@ AUR_DEPS_DIR="/tmp/aur-deps"
 mkdir -p "$AUR_DEPS_DIR"
 
 AUR_ONLY_DEPS=(
-    autotrace-nomagick
-    dmalloc
-    flif
-    libfpx
     libumem-git
+    dmalloc
+    libfpx
+    flif
+    pstoedit-nomagick    # must come BEFORE autotrace-nomagick (its dep)
+    autotrace-nomagick
     magickcache-git
-    pstoedit-nomagick
 )
 
 # ── 1. 把本仓注册进 pacman（幂等），并刷新数据库 ─────────────────
@@ -71,6 +71,9 @@ build_from_aur() {
         echo "  [hook] ✗ git clone failed for AUR dep $p" >&2
         exit 1
     fi
+    # makepkg 7.1 把 BUILDENV 声明为 readonly，部分 AUR PKGBUILD（如
+    # autotrace-nomagick）会 `BUILDENV+=('!check')` 直接报错。删掉该行。
+    sed -i '/^[[:space:]]*BUILDENV/d' "$d/PKGBUILD"
     # makepkg -s 会装该 AUR 包自己的依赖（官方 + 本仓均可解析）
     if ! ( cd "$d" && makepkg -s --noconfirm --needed >"$logfile" 2>&1 ); then
         echo "  [hook] ✗ makepkg failed for AUR dep $p — log tail:" >&2
