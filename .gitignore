@@ -1,0 +1,2 @@
+worker-assets/*
+!worker-assets/.gitkeep

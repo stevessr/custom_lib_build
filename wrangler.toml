@@ -1,8 +1,16 @@
 # Cloudflare Worker 配置（原生 wrangler 格式）
-# 部署：仓库根执行 npx wrangler deploy（或使用 Deploy.md 顶部的部署按钮）
+# 部署：仓库根执行 npx wrangler deploy（或使用 Deploy.md 顶部的部署按钮；
+#       进阶模式由 .github/workflows/deploy-cloudflare.yaml 自动部署）
 name = "arch-lib-s3-proxy"
 main = "cloudflare/worker.js"
 compatibility_date = "2025-01-01"
+
+# 静态资源分流：<25MB 的文件（db/files/签名/元数据/小包）由
+# deploy-cloudflare.yaml 工作流填充到 worker-assets/ 并随 Worker 上传。
+# run_worker_first = true：Worker 先运行（先查 assets，未命中走 S3 代理）。
+[assets]
+directory = "./worker-assets"
+run_worker_first = true
 
 # 非敏感变量（敏感凭证用 wrangler secret put 配置，见 Deploy.md）
 [vars]

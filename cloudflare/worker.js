@@ -1,15 +1,20 @@
-// cloudflare/worker.js — S3 私有桶代理
+// cloudflare/worker.js — S3 私有桶代理 + 静态资源分流
 //
-// 让 pacman 无需凭证即可通过 Cloudflare Worker 匿名访问私有 S3 兼容桶
-// （AWS S3 / Cloudflare R2 / MinIO / Backblaze B2 …）。
+// 让 pacman 无需凭证即可通过 Cloudflare Worker 访问 pacman 仓库：
+//   - <25MB 的文件（db/files/签名/元数据/小包）由部署 workflow 嵌入
+//     Workers 静态资源（assets，单文件上限 25 MiB），Worker 直接返回
+//   - ≥25MB 的大包不在 assets 中，Worker 用 SigV4 签名代理从私有
+//     S3/R2 桶拉取（需 S3_* 环境变量）
 //
-// 原理：
-//   客户端 (匿名) ──> Worker(持有 S3 凭证，SigV4 签名 GET/HEAD) ──> 私有桶
+// 原理:
+//   客户端(匿名) ──> Worker ──> assets 命中: 直接返回（<25MB）
+//                          └──> S3 签名 GET/HEAD（≥25MB 大包）
 //
 // 请求映射 (path-style):
 //   GET https://<worker域名>/<BASE_PATH>/<key>
-//     -> GET https://<S3_ENDPOINT>/<S3_BUCKET>/<key>   (SigV4 签名)
-// 透传 Range 头（pacman 断点续传依赖 206），GET 200 响应写入 Cloudflare 缓存。
+//     -> assets 优先；未命中 -> https://<S3_ENDPOINT>/<S3_BUCKET>/<key>
+// 透传 Range 头（pacman 断点续传依赖 206），S3 代理的 GET 200 响应写入
+// Cloudflare 缓存。
 //
 // ── 部署 ─────────────────────────────────────────────────────────────
 //   npx wrangler deploy cloudflare/worker.js --name s3-pacman-proxy
@@ -51,18 +56,10 @@ export default {
       return new Response('Method Not Allowed', { status: 405 });
     }
 
-    const endpoint = (env.S3_ENDPOINT || '').replace(/\/+$/, '');
-    const bucket = env.S3_BUCKET || '';
-    const accessKey = env.S3_ACCESS_KEY_ID || '';
-    const secretKey = env.S3_SECRET_ACCESS_KEY || '';
-    if (!endpoint || !bucket || !accessKey || !secretKey) {
-      return new Response('S3 proxy not configured (missing env)', { status: 500 });
-    }
-
     // 剥离 BASE_PATH 前缀得到桶内 key
     const url = new URL(request.url);
-    let key = url.pathname;
     const basePath = (env.BASE_PATH || '').replace(/^\/+|\/+$/g, '');
+    let key = url.pathname;
     if (basePath) {
       const prefix = '/' + basePath + '/';
       if (!key.startsWith(prefix)) {
@@ -73,6 +70,25 @@ export default {
     key = key.replace(/^\/+/, '');
     if (!key) {
       return new Response('Not Found', { status: 404 });
+    }
+
+    // ── 静态资源优先（<25MB 文件由 deploy-cloudflare.yaml 嵌入 assets）─
+    // assets 未命中（404）才回落 S3 签名代理（≥25MB 大包）。
+    if (env.ASSETS) {
+      const assetRequest = new Request(new URL('/' + key, url.origin), request);
+      const assetResponse = await env.ASSETS.fetch(assetRequest);
+      if (assetResponse.status !== 404) {
+        return assetResponse;
+      }
+    }
+
+    // ── S3 签名代理（大文件，见文件头部说明）────────────────────────
+    const endpoint = (env.S3_ENDPOINT || '').replace(/\/+$/, '');
+    const bucket = env.S3_BUCKET || '';
+    const accessKey = env.S3_ACCESS_KEY_ID || '';
+    const secretKey = env.S3_SECRET_ACCESS_KEY || '';
+    if (!endpoint || !bucket || !accessKey || !secretKey) {
+      return new Response('S3 proxy not configured (missing env)', { status: 500 });
     }
 
     // 组装目标 URL（path-style: endpoint/bucket/key）

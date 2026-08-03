@@ -1,0 +1,60 @@
+# =============================================================================
+# Deploy Cloudflare Worker（进阶自动部署）
+#
+# 在 "Build AUR Repository" 成功发布后自动运行（也可手动触发）：
+#   1. 下载 latest Release 全部资产
+#   2. 将 <25MB 的文件收集到 worker-assets/
+#      （Cloudflare Workers 静态资源单文件上限 25 MiB）——
+#      db/files/签名/元数据/小包直接由 Worker 托管
+#   3. wrangler deploy 上传 Worker + assets（见 wrangler.toml 的 [assets]）
+#   4. ≥25MB 的大包不在 assets 中：Worker 运行时回落 S3 签名代理，
+#      因此需同时启用 build-repo.yaml 的 deploy-s3 job（S3_* secrets）
+#
+# 需要配置 secrets（未配置则本工作流自动跳过）：
+#   CLOUDFLARE_API_TOKEN   Cloudflare API 令牌（Workers Scripts: Edit,
+#                          Account Settings: Read）
+#   CLOUDFLARE_ACCOUNT_ID  Cloudflare 账户 ID
+# =============================================================================
+
+name: Deploy Cloudflare Worker
+
+on:
+  workflow_run:
+    workflows: ["Build AUR Repository"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: ${{ (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') && secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download latest release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p staging
+          gh release download latest --repo "$GITHUB_REPOSITORY" --dir staging --clobber
+          echo "--- Downloaded $(ls staging | wc -l) assets ---"
+
+      - name: Collect assets <25MB into worker-assets
+        run: |
+          mkdir -p worker-assets
+          find staging -maxdepth 1 -type f -size -25M -exec cp -t worker-assets/ {} +
+          big=$(find staging -maxdepth 1 -type f -size +25M | wc -l)
+          echo "--- worker-assets: $(ls worker-assets | wc -l) files (<25MB, 由 Worker 托管) ---"
+          ls -lh worker-assets/ | head -20
+          echo "--- ≥25MB: $big files（走 S3 代理，需 deploy-s3 job）---"
+
+      - name: Deploy Worker with wrangler
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy

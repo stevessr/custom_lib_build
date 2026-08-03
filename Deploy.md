@@ -12,13 +12,15 @@
 ## 架构
 
 ```
-pacman 客户端 ──> Cloudflare Worker（SigV4 签名代理）──> 私有 S3/R2 桶
-     │                                                    ▲
-     └── 匿名请求（无需凭证）                      （凭证仅存于 Worker 环境变量）
+pacman 客户端 ──> Cloudflare Worker ──> assets 命中：直接返回（<25MB 文件）
+     │                                    └──> S3 签名代理（≥25MB 大包）
+     └── 匿名请求（无需凭证）                 （凭证仅存于 Worker 环境变量）
 ```
 
 - **GitHub Actions** 构建包 → 发布到 `latest` Release → 同步到私有桶（可配置）
-- **Cloudflare Worker** 持有桶凭证，为 pacman 匿名签名 GET/HEAD 请求（支持 Range 断点续传与 CDN 缓存）
+- **Cloudflare Worker** 分流：`<25MB` 文件（db/files/签名/元数据/小包）托管为
+  Workers 静态资源直接返回；`≥25MB` 大包走 SigV4 签名代理从私有桶拉取
+  （支持 Range 断点续传与 CDN 缓存）
 
 ---
 
@@ -52,6 +54,36 @@ npx wrangler deploy          # 仓库根执行，读取 wrangler.toml（main = c
 ```
 
 首次运行会提示确认，之后每次更新 `worker.js` 后重新执行该命令即可。
+
+## 进阶：自动部署 Workflow（推荐）
+
+配置两个 secrets 后，`Build AUR Repository` 每次发布成功会自动重新部署
+Worker，无需手动操作：
+
+| Secret | 值 |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API 令牌（权限：Workers Scripts *Edit*、Account Settings *Read*） |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账户 ID |
+
+```bash
+# 在 Cloudflare Dashboard → My Profile → API Tokens 创建令牌
+# 然后在仓库 Settings → Secrets and variables → Actions 添加上述两项
+```
+
+工作流（`.github/workflows/deploy-cloudflare.yaml`）每次运行：
+
+1. 下载 `latest` Release 全部资产
+2. **`<25MB` 文件收集到 `worker-assets/`**（Cloudflare Workers 静态资源
+   单文件上限 25 MiB）——`arch_lib.db`/`.files`、所有 `.sig`、公钥、
+   `version-*.txt`/`manifest-*.txt` 及小包直接由 Worker 托管
+3. `wrangler deploy` 上传 Worker + assets（`wrangler.toml` 的 `[assets]`）
+4. **`≥25MB` 大包**不在 assets 中，Worker 运行时回落 S3 签名代理——
+   因此本模式依赖 §6 的 S3 部署已配置
+
+也可在 Actions 页手动触发 **Deploy Cloudflare Worker**。
+
+> 免费版 Workers 静态资源配额有限（约 512 MiB），若 `latest` 中小文件
+> 总量超限，部署会失败；此时仅 S3 代理模式（跳过本工作流）不受影响。
 
 ## 4. 配置 Worker 环境变量
 
