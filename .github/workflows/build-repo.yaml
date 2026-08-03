@@ -57,6 +57,8 @@ jobs:
   # ── Publish: collect all packages, build pacman repo database ──────
   publish:
     needs: [prepare, build]
+    # 单个 build 失败不应阻塞整个仓库发布：prepare 成功后即发布已成功的包。
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -91,6 +93,7 @@ jobs:
           pattern: package-*
           path: package-artifacts
           merge-multiple: false
+          fail-if-not-found: false
 
       - name: Collect package artifacts
         run: |

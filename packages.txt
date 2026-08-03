@@ -25,7 +25,7 @@ dmalloc
 flif
 libfpx
 pstoedit-nomagick
-uxedo-control-center-bin
+tuxedo-control-center-bin
 mechrevo-drivers-dkms
 tuxedo-drivers-dkms
 mcontrolcenter-bin
