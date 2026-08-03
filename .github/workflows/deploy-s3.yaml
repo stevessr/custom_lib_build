@@ -1,0 +1,56 @@
+# =============================================================================
+# Deploy to S3 (reusable) — 将 latest Release 的全部资产同步到 S3 兼容存储
+#
+# 由 build-repo.yaml（发布成功后自动）或 manual-deploy-s3.yaml（手动触发）
+# 调用。配置 S3_* secrets 后启用；aws s3 sync 追加 --delete，远端与
+# latest Release 严格一致，旧版本包文件自动移除。
+#
+# 需要 secrets（inherit 传递）：
+#   GITHUB_TOKEN（自动）S3_ENDPOINT  S3_BUCKET  S3_ACCESS_KEY_ID
+#   S3_SECRET_ACCESS_KEY  S3_REGION（可选）S3_PREFIX（可选）
+# =============================================================================
+
+name: Deploy to S3 (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      inherit: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-s3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Download latest release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p staging
+          gh release download latest --repo "$GITHUB_REPOSITORY" --dir staging --clobber
+          echo "--- Staged assets ($(ls staging | wc -l) files) ---"
+          ls -lh staging | head -15
+
+      - name: Compute S3 target
+        id: target
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_PREFIX: ${{ secrets.S3_PREFIX }}
+        run: |
+          TARGET="s3://${S3_BUCKET}${S3_PREFIX:+/}${S3_PREFIX}"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Syncing to: $TARGET"
+
+      - name: Sync to S3 (--delete removes stale objects)
+        uses: aws-actions/aws-s3-sync@v1
+        with:
+          aws-region: ${{ secrets.S3_REGION || 'us-east-1' }}
+          aws-access-key-id: ${{ secrets.S3_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          endpoint-url: ${{ secrets.S3_ENDPOINT }}
+          source-dir: staging
+          dest-dir: ${{ steps.target.outputs.target }}
+          additional-flags: --delete

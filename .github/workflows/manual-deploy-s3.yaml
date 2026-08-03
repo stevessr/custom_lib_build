@@ -1,0 +1,21 @@
+# =============================================================================
+# Manual Deploy to S3 — 手动将 latest Release 同步到 S3
+#
+# 不重新构建、不重发 Release，仅重新执行 S3 同步（--delete）。
+# 适合上次 S3 同步失败后重试，或更换桶/端点后强制重同步。
+# 需要配置 S3_* secrets（未配置则跳过）。
+# =============================================================================
+
+name: Manual Deploy to S3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-s3:
+    if: ${{ secrets.S3_ENDPOINT != '' && secrets.S3_BUCKET != '' && secrets.S3_ACCESS_KEY_ID != '' && secrets.S3_SECRET_ACCESS_KEY != '' }}
+    uses: ./.github/workflows/deploy-s3.yaml
+    secrets: inherit

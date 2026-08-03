@@ -1,16 +1,15 @@
 # =============================================================================
 # Build AUR Repository — daily cron + manual trigger (orchestrator)
 #
-# Strategy:
-#   1. prepare  — read packages.txt, generate matrix
-#   2. build    — matrix: one job per package → calls build-package.yaml,
-#                 which uploads a package artifact (no per-package Release)
-#   3. publish  — download every package artifact, run repo-add to create
-#                 the pacman repo database, and upload the complete repository
-#                 to the `latest` Release
+# 编排器：调度（schedule/push/manual）→ prepare → build（matrix）→
+# publish（调 publish-repo.yaml）→ deploy-s3（调 deploy-s3.yaml，可选）
 #
-# Users add the `latest` Release as a pacman repository:
-#   Server=.../releases/download/latest
+# 子工作流（各自可独立复用/手动触发）：
+#   .github/workflows/build-package.yaml   # 单包构建（matrix 调用）
+#   .github/workflows/publish-repo.yaml    # 收集 artifacts + repo-add + 上传 latest
+#   .github/workflows/deploy-s3.yaml       # latest → S3 同步
+#   .github/workflows/manual-publish.yaml  # 手动重发布（从历史构建 run）
+#   .github/workflows/manual-deploy-s3.yaml# 手动 S3 同步
 # =============================================================================
 
 name: Build AUR Repository
@@ -54,255 +53,17 @@ jobs:
     with:
       package: ${{ matrix.pkg }}
 
-  # ── Publish: collect all packages, build pacman repo database ──────
+  # ── Publish: collect packages, build repo db, upload latest ────────
   publish:
     needs: [prepare, build]
     # 单个 build 失败不应阻塞整个仓库发布：prepare 成功后即发布已成功的包。
     if: ${{ !cancelled() && needs.prepare.result == 'success' }}
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:latest
-      options: --user root
-    steps:
-      - uses: actions/checkout@v4
+    uses: ./.github/workflows/publish-repo.yaml
+    secrets: inherit
 
-      - name: Initialize Arch system
-        run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel gnupg pacman-contrib jq
-
-      - name: Import signing key
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        run: |
-          if [ -n "$GPG_PRIVATE_KEY" ]; then
-            printf '%s\n' "$GPG_PRIVATE_KEY" > /tmp/gpg-key.asc
-            gpg --batch --import /tmp/gpg-key.asc
-            rm -f /tmp/gpg-key.asc
-            FPR=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
-            echo "KEY_ID=$FPR" >> "$GITHUB_ENV"
-            echo "Signing key imported: $FPR"
-          else
-            echo "No GPG_PRIVATE_KEY secret — repo unsigned"
-          fi
-
-      # ── Download artifacts from the matrix build jobs ──────────────
-      - name: Download package build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: package-*
-          path: package-artifacts
-          merge-multiple: false
-          fail-if-not-found: false
-
-      - name: Collect package artifacts
-        run: |
-          mkdir -p repos/x86_64 release-metadata
-          shopt -s nullglob
-          package_count=0
-
-          for artifact_dir in package-artifacts/package-*; do
-            [ -d "$artifact_dir" ] || continue
-            for package_file in "$artifact_dir"/*.pkg.tar.zst; do
-              cp -f "$package_file" repos/x86_64/
-              package_count=$((package_count + 1))
-            done
-            for metadata_file in \
-              "$artifact_dir"/version-*.txt \
-              "$artifact_dir"/manifest-*.txt; do
-              [ -f "$metadata_file" ] || continue
-              cp -f "$metadata_file" release-metadata/
-            done
-          done
-
-          if [ "$package_count" -eq 0 ]; then
-            echo "No package artifacts downloaded"
-            exit 1
-          fi
-
-          echo "--- Collected packages ---"
-          ls -lh repos/x86_64/
-          echo "--- Collected metadata ---"
-          ls -lh release-metadata/
-
-      # ── Sanitize epoch colons & sign ───────────────────────────────
-      - name: Sanitize and sign packages
-        run: |
-          cd repos/x86_64
-
-          # Epoch colons (e.g. kiro-ide-2:1.0.242) break GitHub uploads
-          for f in *:*.pkg.tar.zst; do
-            [ -f "$f" ] || continue
-            dest=$(basename "$f" | tr ':' '_')
-            mv -v "$f" "$dest"
-          done
-
-          # Sign each package if key configured
-          if [ -n "${KEY_ID:-}" ]; then
-            for f in *.pkg.tar.zst; do
-              [ -f "$f" ] || continue
-              echo "Signing: $f"
-              gpg --batch --yes --detach-sign --local-user "$KEY_ID" "$f"
-            done
-          fi
-
-      # ── Create repository database ─────────────────────────────────
-      - name: Create repository database
-        run: |
-          cd repos/x86_64
-
-          PKG_COUNT=$(ls -1 *.pkg.tar.zst 2>/dev/null | wc -l || true)
-          echo "Packages in repo: $PKG_COUNT"
-          if [ "$PKG_COUNT" -eq 0 ]; then
-            echo "No packages — aborting"
-            exit 1
-          fi
-
-          rm -f arch_lib.db.tar.gz arch_lib.db arch_lib.files.tar.gz arch_lib.files
-
-          # Only pass .zst files to repo-add: the *.pkg.tar.* glob would also
-          # match the .sig files generated above, and repo-add would try to
-          # parse each signature as a package (bsdtar: Unrecognized archive
-          # format). repo-add picks up sibling .sig files automatically.
-          if [ -n "${KEY_ID:-}" ]; then
-            echo "Signing repository database with $KEY_ID"
-            GPGKEY="$KEY_ID" repo-add --remove --new --sign arch_lib.db.tar.gz ./*.pkg.tar.zst
-          else
-            repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.zst
-          fi
-
-          # Real copies (not symlinks) — GitHub Release assets are flat,
-          # pacman requests both <repo>.db and <repo>.db.tar.gz
-          rm -f arch_lib.db arch_lib.files
-          cp arch_lib.db.tar.gz arch_lib.db
-          cp arch_lib.files.tar.gz arch_lib.files
-
-          if [ -n "${KEY_ID:-}" ]; then
-            cp arch_lib.db.tar.gz.sig arch_lib.db.sig 2>/dev/null || true
-            cp arch_lib.files.tar.gz.sig arch_lib.files.sig 2>/dev/null || true
-          fi
-          ls -lh
-
-      # ── Upload combined repo to `latest` Release ───────────────────
-      # gh CLI is not available in this container — use curl + the REST
-      # API to delete, then the softprops action to create/upload.
-      - name: Delete previous latest release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Delete the old release (lookup by tag), then the tag itself
-          # so the fresh release below starts clean
-          rid=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/latest" \
-            | jq -r '.id // empty' 2>/dev/null)
-          if [ -n "$rid" ]; then
-            echo "Deleting old latest release #$rid"
-            curl -fsSL -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$rid"
-          fi
-          curl -fsSL -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/refs/tags/latest" || true
-
-      - name: Compute release name
-        id: release-name
-        run: |
-          echo "value=Arch Lib Repository $(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-
-      - name: Write release body
-        run: |
-          cat > release-body.md <<EOF
-          ## arch_lib pacman repository
-
-          Daily build of AUR packages.
-
-          **Usage** — add to \`/etc/pacman.conf\`:
-          \`\`\`ini
-          [arch_lib]
-          SigLevel = Optional TrustAll
-          Server = $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/latest
-          \`\`\`
-
-          Then: \`sudo pacman -Sy && sudo pacman -S <package>\`
-
-          **Signing**: 若已配置 GPG_PRIVATE_KEY，包和数据库均带 \`.sig\` 签名。
-          导入公钥后可改用 \`SigLevel = Required DatabaseOptional\` 验证。
-          EOF
-
-      # softprops/action-gh-release = GitHub's own release action (JS,
-      # no gh CLI needed in the container). Globs that match nothing are
-      # ignored (fail_on_unmatched_files: false), so unsigned builds
-      # (no .sig files) still publish.
-      - name: Create new Release
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: latest
-          name: ${{ steps.release-name.outputs.value }}
-          body_path: release-body.md
-          files: |
-            repos/x86_64/*.pkg.tar.zst
-            repos/x86_64/*.pkg.tar.zst.sig
-            repos/x86_64/arch_lib.db
-            repos/x86_64/arch_lib.db.sig
-            repos/x86_64/arch_lib.db.tar.gz
-            repos/x86_64/arch_lib.db.tar.gz.sig
-            repos/x86_64/arch_lib.files
-            repos/x86_64/arch_lib.files.sig
-            repos/x86_64/arch_lib.files.tar.gz
-            repos/x86_64/arch_lib.files.tar.gz.sig
-            release-metadata/version-*.txt
-            release-metadata/manifest-*.txt
-            arch_lib.pub.asc
-          fail_on_unmatched_files: false
-
-  # ── Deploy to S3（可选，可配置）────────────────────────────────────
-  # 将 latest Release 的全部资产同步到 S3 兼容存储（AWS S3 / Cloudflare
-  # R2 / MinIO / Backblaze B2 …），供 pacman 直接使用或经
-  # cloudflare/worker.js 代理私有桶。
-  #
-  # 配置以下 secrets 后本 job 自动启用（未配置则跳过）：
-  #   S3_ENDPOINT           如 https://<accountid>.r2.cloudflarestorage.com
-  #   S3_BUCKET             桶名
-  #   S3_ACCESS_KEY_ID      S3 兼容凭证
-  #   S3_SECRET_ACCESS_KEY
-  #   S3_REGION（可选，默认 us-east-1）
-  #   S3_PREFIX（可选，桶内前缀，默认桶根）
-  #
-  # aws s3 sync 追加 --delete：远端多余对象（旧版本包文件、已删除的
-  # 数据库）全部移除，保证 S3 与 latest Release 完全一致，不残留旧版本。
+  # ── Deploy to S3（可选，配置 S3_* secrets 后自动启用）──────────────
   deploy-s3:
     needs: publish
     if: ${{ needs.publish.result == 'success' && secrets.S3_ENDPOINT != '' && secrets.S3_BUCKET != '' && secrets.S3_ACCESS_KEY_ID != '' && secrets.S3_SECRET_ACCESS_KEY != '' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - name: Download latest release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p staging
-          gh release download latest --repo "$GITHUB_REPOSITORY" --dir staging --clobber
-          echo "--- Staged assets ($(ls staging | wc -l) files) ---"
-          ls -lh staging | head -15
-
-      - name: Compute S3 target
-        id: target
-        env:
-          S3_BUCKET: ${{ secrets.S3_BUCKET }}
-          S3_PREFIX: ${{ secrets.S3_PREFIX }}
-        run: |
-          TARGET="s3://${S3_BUCKET}${S3_PREFIX:+/}${S3_PREFIX}"
-          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
-          echo "Syncing to: $TARGET"
-
-      - name: Sync to S3 (--delete removes stale objects)
-        uses: aws-actions/aws-s3-sync@v1
-        with:
-          aws-region: ${{ secrets.S3_REGION || 'us-east-1' }}
-          aws-access-key-id: ${{ secrets.S3_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-          endpoint-url: ${{ secrets.S3_ENDPOINT }}
-          source-dir: staging
-          dest-dir: ${{ steps.target.outputs.target }}
-          additional-flags: --delete
+    uses: ./.github/workflows/deploy-s3.yaml
+    secrets: inherit

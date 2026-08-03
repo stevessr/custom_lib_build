@@ -1,0 +1,43 @@
+# =============================================================================
+# Manual Publish — 手动重新发布 `latest` Release
+#
+# 从最近一次成功的 "Build AUR Repository" 运行下载 package-* artifacts，
+# 重新生成 pacman 仓库数据库并上传到 `latest`（无需重新构建全部包）。
+# 适合上次发布失败后重试，或更新仓库内容后重发。
+# =============================================================================
+
+name: Manual Publish
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  find-run:
+    runs-on: ubuntu-latest
+    outputs:
+      run_id: ${{ steps.find.outputs.run_id }}
+    steps:
+      - name: Find latest successful build run
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID=$(gh run list --workflow build-repo.yaml --branch master \
+            --status success --limit 1 --json databaseId \
+            --jq '.[0].databaseId // empty' 2>/dev/null || true)
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::未找到成功的 Build AUR Repository 运行"
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Using build run: $RUN_ID"
+
+  publish:
+    needs: find-run
+    uses: ./.github/workflows/publish-repo.yaml
+    with:
+      build-run-id: ${{ needs.find-run.outputs.run_id }}
+    secrets: inherit

@@ -1,0 +1,236 @@
+# =============================================================================
+# Publish Repository (reusable) — 收集包 artifacts，生成 pacman 仓库数据库，
+# 上传到 `latest` Release
+#
+# 由 build-repo.yaml 调用（默认从当前 workflow run 下载 package-* artifacts）；
+# 也可由 manual-publish.yaml 调用并传入 build-run-id，从指定的历史构建
+# run 下载 artifacts 重新发布（如上次发布失败时重试）。
+#
+# 需要 secrets（inherit 传递）：
+#   GITHUB_TOKEN（自动）  GPG_PRIVATE_KEY（可选，签名）
+# =============================================================================
+
+name: Publish Repository (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      # 指定从中下载 artifacts 的构建 run ID；留空则用当前 workflow run
+      build-run-id:
+        type: string
+        required: false
+    secrets:
+      inherit: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize Arch system
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel gnupg pacman-contrib jq
+
+      - name: Import signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            printf '%s\n' "$GPG_PRIVATE_KEY" > /tmp/gpg-key.asc
+            gpg --batch --import /tmp/gpg-key.asc
+            rm -f /tmp/gpg-key.asc
+            FPR=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+            echo "KEY_ID=$FPR" >> "$GITHUB_ENV"
+            echo "Signing key imported: $FPR"
+          else
+            echo "No GPG_PRIVATE_KEY secret — repo unsigned"
+          fi
+
+      # ── Download artifacts: 当前 run（默认）或指定 run（manual-publish）
+      - name: Download package build artifacts
+        if: ${{ inputs.build-run-id == '' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: package-artifacts
+          merge-multiple: false
+          fail-if-not-found: false
+
+      - name: Download package build artifacts (from build run ${{ inputs.build-run-id }})
+        if: ${{ inputs.build-run-id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: package-artifacts
+          merge-multiple: false
+          run-id: ${{ inputs.build-run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Collect package artifacts
+        run: |
+          mkdir -p repos/x86_64 release-metadata
+          shopt -s nullglob
+          package_count=0
+
+          for artifact_dir in package-artifacts/package-*; do
+            [ -d "$artifact_dir" ] || continue
+            for package_file in "$artifact_dir"/*.pkg.tar.zst; do
+              cp -f "$package_file" repos/x86_64/
+              package_count=$((package_count + 1))
+            done
+            for metadata_file in \
+              "$artifact_dir"/version-*.txt \
+              "$artifact_dir"/manifest-*.txt; do
+              [ -f "$metadata_file" ] || continue
+              cp -f "$metadata_file" release-metadata/
+            done
+          done
+
+          if [ "$package_count" -eq 0 ]; then
+            echo "No package artifacts downloaded"
+            exit 1
+          fi
+
+          echo "--- Collected packages ---"
+          ls -lh repos/x86_64/
+          echo "--- Collected metadata ---"
+          ls -lh release-metadata/
+
+      # ── Sanitize epoch colons & sign ───────────────────────────────
+      - name: Sanitize and sign packages
+        run: |
+          cd repos/x86_64
+
+          # Epoch colons (e.g. kiro-ide-2:1.0.242) break GitHub uploads
+          for f in *:*.pkg.tar.zst; do
+            [ -f "$f" ] || continue
+            dest=$(basename "$f" | tr ':' '_')
+            mv -v "$f" "$dest"
+          done
+
+          # Sign each package if key configured
+          if [ -n "${KEY_ID:-}" ]; then
+            for f in *.pkg.tar.zst; do
+              [ -f "$f" ] || continue
+              echo "Signing: $f"
+              gpg --batch --yes --detach-sign --local-user "$KEY_ID" "$f"
+            done
+          fi
+
+      # ── Create repository database ─────────────────────────────────
+      - name: Create repository database
+        run: |
+          cd repos/x86_64
+
+          PKG_COUNT=$(ls -1 *.pkg.tar.zst 2>/dev/null | wc -l || true)
+          echo "Packages in repo: $PKG_COUNT"
+          if [ "$PKG_COUNT" -eq 0 ]; then
+            echo "No packages — aborting"
+            exit 1
+          fi
+
+          rm -f arch_lib.db.tar.gz arch_lib.db arch_lib.files.tar.gz arch_lib.files
+
+          # Only pass .zst files to repo-add: the *.pkg.tar.* glob would also
+          # match the .sig files generated above, and repo-add would try to
+          # parse each signature as a package (bsdtar: Unrecognized archive
+          # format). repo-add picks up sibling .sig files automatically.
+          if [ -n "${KEY_ID:-}" ]; then
+            echo "Signing repository database with $KEY_ID"
+            GPGKEY="$KEY_ID" repo-add --remove --new --sign arch_lib.db.tar.gz ./*.pkg.tar.zst
+          else
+            repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.zst
+          fi
+
+          # Real copies (not symlinks) — GitHub Release assets are flat,
+          # pacman requests both <repo>.db and <repo>.db.tar.gz
+          rm -f arch_lib.db arch_lib.files
+          cp arch_lib.db.tar.gz arch_lib.db
+          cp arch_lib.files.tar.gz arch_lib.files
+
+          if [ -n "${KEY_ID:-}" ]; then
+            cp arch_lib.db.tar.gz.sig arch_lib.db.sig 2>/dev/null || true
+            cp arch_lib.files.tar.gz.sig arch_lib.files.sig 2>/dev/null || true
+          fi
+          ls -lh
+
+      # ── Upload combined repo to `latest` Release ───────────────────
+      # gh CLI is not available in this container — use curl + the REST
+      # API to delete, then the softprops action to create/upload.
+      - name: Delete previous latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Delete the old release (lookup by tag), then the tag itself
+          # so the fresh release below starts clean
+          rid=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/latest" \
+            | jq -r '.id // empty' 2>/dev/null)
+          if [ -n "$rid" ]; then
+            echo "Deleting old latest release #$rid"
+            curl -fsSL -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$rid"
+          fi
+          curl -fsSL -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/refs/tags/latest" || true
+
+      - name: Compute release name
+        id: release-name
+        run: |
+          echo "value=Arch Lib Repository $(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Write release body
+        run: |
+          cat > release-body.md <<EOF
+          ## arch_lib pacman repository
+
+          Daily build of AUR packages.
+
+          **Usage** — add to \`/etc/pacman.conf\`:
+          \`\`\`ini
+          [arch_lib]
+          SigLevel = Optional TrustAll
+          Server = $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/latest
+          \`\`\`
+
+          Then: \`sudo pacman -Sy && sudo pacman -S <package>\`
+
+          **Signing**: 若已配置 GPG_PRIVATE_KEY，包和数据库均带 \`.sig\` 签名。
+          导入公钥后可改用 \`SigLevel = Required DatabaseOptional\` 验证。
+          EOF
+
+      # softprops/action-gh-release = GitHub's own release action (JS,
+      # no gh CLI needed in the container). Globs that match nothing are
+      # ignored (fail_on_unmatched_files: false), so unsigned builds
+      # (no .sig files) still publish.
+      - name: Create new Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: latest
+          name: ${{ steps.release-name.outputs.value }}
+          body_path: release-body.md
+          files: |
+            repos/x86_64/*.pkg.tar.zst
+            repos/x86_64/*.pkg.tar.zst.sig
+            repos/x86_64/arch_lib.db
+            repos/x86_64/arch_lib.db.sig
+            repos/x86_64/arch_lib.db.tar.gz
+            repos/x86_64/arch_lib.db.tar.gz.sig
+            repos/x86_64/arch_lib.files
+            repos/x86_64/arch_lib.files.sig
+            repos/x86_64/arch_lib.files.tar.gz
+            repos/x86_64/arch_lib.files.tar.gz.sig
+            release-metadata/version-*.txt
+            release-metadata/manifest-*.txt
+            arch_lib.pub.asc
+          fail_on_unmatched_files: false
