@@ -20,6 +20,8 @@ imagemagick-full
 uxedo-control-center-bin
 mechrevo-drivers-dkms
 tuxedo-drivers-dkms
+mcontrolcenter-bin
+tongfang-control-git
 
 # Lifeboat?
 warp-plus-bin

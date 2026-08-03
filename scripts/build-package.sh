@@ -94,7 +94,21 @@ else
 
     if [ ! -d "$PKG_DIR/.git" ]; then
         rm -rf "$PKG_DIR"
-        git clone --depth=1 "https://aur.archlinux.org/$AUR_REPO.git" "$PKG_DIR" 2>&1 | sed 's/^/  /'
+        # AUR 偶发 TLS EOF/网络抖动；克隆加重试，避免一次失败杀掉整个构建
+        mkdir -p "$BUILD_DIR"
+        clone_ok=0
+        for attempt in 1 2 3 4 5; do
+            if git clone --depth=1 "https://aur.archlinux.org/$AUR_REPO.git" "$PKG_DIR" >/dev/null 2>&1; then
+                clone_ok=1
+                break
+            fi
+            echo "  (clone $AUR_REPO attempt $attempt failed; retrying)"
+            sleep 5
+        done
+        if [ "$clone_ok" -ne 1 ]; then
+            echo -e "${RED}  ✗ git clone failed for $AUR_REPO${NC}" >&2
+            exit 1
+        fi
     fi
 fi
 

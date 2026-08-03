@@ -87,7 +87,17 @@ build_from_aur() {
     echo "  [hook] Building AUR dep: $p ..."
     rm -rf "$d"
     mkdir -p "$d"
-    if ! ( cd "$d" && git clone -q --depth=1 "https://aur.archlinux.org/$p.git" . ); then
+    clone_ok=0
+    for attempt in 1 2 3 4 5; do
+        if ( cd "$d" && git clone -q --depth=1 "https://aur.archlinux.org/$p.git" . ); then
+            clone_ok=1
+            break
+        fi
+        echo "  [hook] (clone $p attempt $attempt failed; retrying)"
+        rm -rf "$d"/* && true
+        sleep 5
+    done
+    if [ "$clone_ok" -ne 1 ]; then
         echo "  [hook] ✗ git clone failed for AUR dep $p" >&2
         exit 1
     fi
