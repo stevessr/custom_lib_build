@@ -62,8 +62,10 @@ jobs:
     secrets: inherit
 
   # ── Deploy to S3（可选，配置 S3_* secrets 后自动启用）──────────────
+  # secrets 不能用于 job if（GitHub 限制），S3 配置检查在 deploy-s3.yaml
+  # 内部 guard step 完成（未配置则跳过所有步骤）。
   deploy-s3:
     needs: publish
-    if: ${{ needs.publish.result == 'success' && secrets.S3_ENDPOINT != '' && secrets.S3_BUCKET != '' && secrets.S3_ACCESS_KEY_ID != '' && secrets.S3_SECRET_ACCESS_KEY != '' }}
+    if: ${{ needs.publish.result == 'success' }}
     uses: ./.github/workflows/deploy-s3.yaml
     secrets: inherit

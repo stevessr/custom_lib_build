@@ -25,7 +25,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
+      # secrets 不能用于 if（GitHub 限制），改为 env 映射 + guard 检查，
+      # 未配置 S3 凭证时跳过后续所有步骤。
+      - name: Check S3 config
+        env:
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+        run: |
+          if [ -n "$S3_ENDPOINT" ] && [ -n "$S3_BUCKET" ] && [ -n "$S3_ACCESS_KEY_ID" ] && [ -n "$S3_SECRET_ACCESS_KEY" ]; then
+            echo "S3_ENABLED=true" >> "$GITHUB_ENV"
+            echo "S3 已配置，执行同步"
+          else
+            echo "S3_ENABLED=false" >> "$GITHUB_ENV"
+            echo "S3 未配置，跳过 S3 部署"
+          fi
+
       - name: Download latest release assets
+        if: ${{ env.S3_ENABLED == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -35,6 +53,7 @@ jobs:
           ls -lh staging | head -15
 
       - name: Compute S3 target
+        if: ${{ env.S3_ENABLED == 'true' }}
         id: target
         env:
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
@@ -45,6 +64,7 @@ jobs:
           echo "Syncing to: $TARGET"
 
       - name: Sync to S3 (--delete removes stale objects)
+        if: ${{ env.S3_ENABLED == 'true' }}
         uses: aws-actions/aws-s3-sync@v1
         with:
           aws-region: ${{ secrets.S3_REGION || 'us-east-1' }}

@@ -29,13 +29,29 @@ permissions:
 
 jobs:
   deploy:
-    if: ${{ (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') && secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+    # secrets 不能用于 if（GitHub 限制），CF 配置检查在首个 step 完成，
+    # 未配置 CLOUDFLARE_* secrets 时跳过后续所有步骤。
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check Cloudflare config
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "CF_ENABLED=true" >> "$GITHUB_ENV"
+            echo "Cloudflare 已配置，执行部署"
+          else
+            echo "CF_ENABLED=false" >> "$GITHUB_ENV"
+            echo "Cloudflare 未配置，跳过自动部署"
+          fi
+
       - name: Download latest release assets
+        if: ${{ env.CF_ENABLED == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -44,6 +60,7 @@ jobs:
           echo "--- Downloaded $(ls staging | wc -l) assets ---"
 
       - name: Collect assets <25MB into worker-assets
+        if: ${{ env.CF_ENABLED == 'true' }}
         run: |
           mkdir -p worker-assets
           find staging -maxdepth 1 -type f -size -25M -exec cp -t worker-assets/ {} +
@@ -53,6 +70,7 @@ jobs:
           echo "--- ≥25MB: $big files（走 S3 代理，需 deploy-s3 job）---"
 
       - name: Deploy Worker with wrangler
+        if: ${{ env.CF_ENABLED == 'true' }}
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}

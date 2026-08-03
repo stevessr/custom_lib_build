@@ -3,7 +3,8 @@
 #
 # 不重新构建、不重发 Release，仅重新执行 S3 同步（--delete）。
 # 适合上次 S3 同步失败后重试，或更换桶/端点后强制重同步。
-# 需要配置 S3_* secrets（未配置则跳过）。
+# 需要配置 S3_* secrets（未配置时 deploy-s3.yaml 内部 guard step 跳过）。
+# secrets 不能用于 job if（GitHub 限制），故直接调用。
 # =============================================================================
 
 name: Manual Deploy to S3
@@ -16,6 +17,5 @@ permissions:
 
 jobs:
   deploy-s3:
-    if: ${{ secrets.S3_ENDPOINT != '' && secrets.S3_BUCKET != '' && secrets.S3_ACCESS_KEY_ID != '' && secrets.S3_SECRET_ACCESS_KEY != '' }}
     uses: ./.github/workflows/deploy-s3.yaml
     secrets: inherit
