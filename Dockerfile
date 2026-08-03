@@ -21,6 +21,15 @@ FROM archlinux:latest
 RUN rm -rf /etc/pacman.d/gnupg && pacman-key --init && pacman-key --populate archlinux
 
 # 2. 全量升级 + 安装构建/发布所需依赖（一次性，构建镜像时完成）
+#    - base-devel: gcc / binutils / make / pkgconf 等基础编译工具链
+#    - clang / llvm / lld / cmake / ninja / ccache: 现代 C/C++ 构建链
+#    - rust / cargo / go / nodejs / npm / python: 常见语言工具链
+#      （AUR 包构建的高频依赖，预装免去每次下载）
+#    - tar / zip / unzip / wget / curl: 源码下载与打包工具
+#    - gnupg / jq / pacman-contrib / sudo: 发布与构建流程依赖
 RUN pacman -Syu --noconfirm && \
     pacman -S --noconfirm --needed \
-      base-devel git gnupg jq libglvnd pacman-contrib sudo
+      base-devel git gnupg jq libglvnd pacman-contrib sudo \
+      clang llvm lld cmake ninja ccache \
+      rust cargo go nodejs npm python python-pip \
+      tar zip unzip wget
