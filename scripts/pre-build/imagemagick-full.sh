@@ -88,18 +88,15 @@ build_from_aur() {
     # （libfpx 等）。尝试用 archive.org 回退获取。
     sed -i 's|https://imagemagick\.org/archive/delegates/|https://web.archive.org/web/2020id_/https://imagemagick.org/archive/delegates/|g' "$d/PKGBUILD"
     # pstoedit-nomagick: 在 build() 前修补 fillpoly.cpp 的 constexpr 错误。
-    # g++16 + -std=gnu++11 下 constexpr 函数体必须单一 return 语句。
-    # （移除 constexpr 前缀，参数名不限）
+    # g++16 下 -std=gnu++11 的 C++11 constexpr 规则（函数体必须单一 return
+    # 语句）会让 pstoedit 的 fillpoly.cpp/drvpdf.cpp 等编译失败。逐个 sed 打
+    # 地鼠不可靠；改成在 build() 里注入 CXXFLAGS=-std=gnu++17 —— C++17 的
+    # relaxed constexpr 允许多语句函数体，一次解决所有这类错误。
     if [ "$p" = "pstoedit-nomagick" ]; then
-        echo "  [hook]   injecting prepare() for pstoedit constexpr fix"
-        if ! grep -q '^prepare()' "$d/PKGBUILD" 2>/dev/null; then
-            cat >> "$d/PKGBUILD" <<'PREPARE_EOF'
-prepare() {
-    cd "pstoedit-${pkgver}"
-    sed -i 's/constexpr int octant(/int octant(/' src/fillpoly.cpp
-}
-PREPARE_EOF
-        fi
+        echo "  [hook]   CXXFLAGS=-std=gnu++17 override for pstoedit"
+        # 在 build() 的 cd 行后插入 CXXFLAGS 覆盖；configure 探测到 CXXFLAGS
+        # 已设置就不会再加 -std=gnu++11。last wins → gnu++17。
+        sed -i 's|^    cd "pstoedit-\${pkgver}"$|    cd "pstoedit-${pkgver}"\n    CXXFLAGS="${CXXFLAGS} -std=gnu++17"|' "$d/PKGBUILD"
     fi
     # makepkg -s 会装该 AUR 包自己的依赖（官方 + 本仓均可解析）。
     # --skippgpcheck：容器连不上 keyserver，且 sha256 已校验通过，
