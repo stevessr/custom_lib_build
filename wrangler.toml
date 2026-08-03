@@ -1,0 +1,10 @@
+# Cloudflare Worker 配置（原生 wrangler 格式）
+# 部署：仓库根执行 npx wrangler deploy（或使用 Deploy.md 顶部的部署按钮）
+name = "arch-lib-s3-proxy"
+main = "cloudflare/worker.js"
+compatibility_date = "2025-01-01"
+
+# 非敏感变量（敏感凭证用 wrangler secret put 配置，见 Deploy.md）
+[vars]
+S3_REGION = "us-east-1"
+BASE_PATH = ""
