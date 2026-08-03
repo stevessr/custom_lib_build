@@ -1,0 +1,140 @@
+# =============================================================================
+# Update sparkle-bin — 每月 1 日中午自动检查上游新版本并更新 PKGBUILD
+#
+# 上游 xishang0128/sparkle 每月末发布新版本（release.yml 月末触发），
+# 本工作流每月 1 日 12:00 (UTC) 运行：
+#   1. 查询上游最新 release tag（如 1.26.8）
+#   2. 若与当前 PKGBUILD 的 pkgver 不同，下载 amd64/arm64 两个 .deb
+#      计算 sha256 校验和
+#   3. 更新 custom-pkgs/sparkle-bin/PKGBUILD（pkgver + source URL + 校验和）
+#   4. 提交并推送到 master —— push 自动触发 "Build AUR Repository"
+#      全量构建并发布到 latest Release
+#
+# 无新版本时不做任何提交，直接结束。
+# =============================================================================
+
+name: Update sparkle-bin
+
+on:
+  schedule:
+    - cron: '0 12 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Query latest upstream version
+        id: version
+        run: |
+          LATEST_TAG="$(
+            curl -fsSL --max-time 30 --retry 3 --retry-delay 3 \
+              'https://api.github.com/repos/xishang0128/sparkle/releases/latest' \
+              | jq -r '.tag_name // empty'
+          )"
+          LATEST_VER="${LATEST_TAG#v}"
+          if ! [[ "$LATEST_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::无法解析上游最新版本 (tag=$LATEST_TAG)"
+            exit 1
+          fi
+          echo "version=$LATEST_VER" >> "$GITHUB_OUTPUT"
+          echo "Upstream latest: $LATEST_VER"
+
+      - name: Check if PKGBUILD is outdated
+        id: check
+        env:
+          LATEST_VER: ${{ steps.version.outputs.version }}
+        run: |
+          CURRENT_VER="$(sed -n 's/^pkgver="\?\([^"]*\)"\?$/\1/p' \
+            custom-pkgs/sparkle-bin/PKGBUILD | head -n1)"
+          echo "Current PKGBUILD pkgver: $CURRENT_VER"
+          echo "current=$CURRENT_VER" >> "$GITHUB_OUTPUT"
+          if [ "$CURRENT_VER" = "$LATEST_VER" ]; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "Already at latest version — nothing to do"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download release assets and compute sha256
+        if: steps.check.outputs.up_to_date == 'false'
+        env:
+          LATEST_VER: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sparkle-assets
+          for arch in amd64 arm64; do
+            url="https://github.com/xishang0128/sparkle/releases/download/${LATEST_VER}/sparkle-linux-${LATEST_VER}-${arch}.deb"
+            # GitHub 直连失败时回退到 ghfast.top 镜像（与本地验证过的路径一致）
+            if ! curl -fsSL --max-time 600 --retry 3 --retry-delay 5 \
+                -o "/tmp/sparkle-assets/${arch}.deb" "$url"; then
+              echo "Direct download failed, falling back to ghfast.top mirror"
+              curl -fsSL --max-time 600 --retry 3 --retry-delay 5 \
+                -o "/tmp/sparkle-assets/${arch}.deb" \
+                "https://ghfast.top/${url}"
+            fi
+            file "/tmp/sparkle-assets/${arch}.deb" | grep -q 'Debian binary package' \
+              || { echo "::error::资产校验失败：${arch} 不是有效 deb"; exit 1; }
+          done
+          echo "SHA256_AMD64=$(sha256sum /tmp/sparkle-assets/amd64.deb | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "SHA256_ARM64=$(sha256sum /tmp/sparkle-assets/arm64.deb | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "amd64: $SHA256_AMD64"
+          echo "arm64: $SHA256_ARM64"
+
+      - name: Update PKGBUILD
+        if: steps.check.outputs.up_to_date == 'false'
+        env:
+          LATEST_VER: ${{ steps.version.outputs.version }}
+          SHA256_AMD64: ${{ env.SHA256_AMD64 }}
+          SHA256_ARM64: ${{ env.SHA256_ARM64 }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, re
+          path = "custom-pkgs/sparkle-bin/PKGBUILD"
+          ver = os.environ["LATEST_VER"]
+          amd = os.environ["SHA256_AMD64"]
+          arm = os.environ["SHA256_ARM64"]
+          with open(path, encoding="utf-8") as f:
+              text = f.read()
+          # pkgver（同时覆盖 provides= 与 source URL 中的版本号）
+          text, n = re.subn(r'\bpkgver="\d+\.\d+\.\d+"', f'pkgver="{ver}"', text)
+          assert n >= 1, "pkgver 行未找到"
+          # sha256sums（amd64）
+          text, n = re.subn(
+              r"sha256sums=\(('[0-9a-f]{64}'|'SKIP')\)",
+              f"sha256sums=('{amd}')", text)
+          assert n == 1, "sha256sums 行未找到"
+          # sha256sums_aarch64（arm64）
+          text, n = re.subn(
+              r"sha256sums_aarch64=\(('[0-9a-f]{64}'|'SKIP')\)",
+              f"sha256sums_aarch64=('{arm}')", text)
+          assert n == 1, "sha256sums_aarch64 行未找到"
+          with open(path, "w", encoding="utf-8", newline="\n") as f:
+              f.write(text)
+          print(f"PKGBUILD updated to {ver}")
+          PYEOF
+          git diff --stat custom-pkgs/sparkle-bin/PKGBUILD
+          # 校验更新后的 PKGBUILD 语法与变量
+          bash -n custom-pkgs/sparkle-bin/PKGBUILD
+          bash -c 'source custom-pkgs/sparkle-bin/PKGBUILD; \
+            echo "pkgver=$pkgver"; \
+            echo "amd64=${sha256sums[0]}"; \
+            echo "arm64=${sha256sums_aarch64[0]}"'
+
+      - name: Commit and push
+        if: steps.check.outputs.up_to_date == 'false'
+        env:
+          LATEST_VER: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom-pkgs/sparkle-bin/PKGBUILD
+          git commit -m "chore(sparkle-bin): bump to ${LATEST_VER} (auto-update)"
+          git push
+          echo "Pushed sparkle-bin ${LATEST_VER} — Build AUR Repository 已自动触发"
