@@ -194,6 +194,24 @@ printf '\n# arch_lib package-size policy\nPKGEXT=.pkg.tar.zst\nCOMPRESSZST=(zstd
 
 if ! makepkg --config "$MAKEPKG_CONFIG" -s --noconfirm --needed 2>&1 | sed 's/^/  /'; then
     echo -e "${RED}  ✗ Build failed for $PKG${NC}"
+    # ── Diagnostics: toolchain + failing configure logs ──────────────
+    # Printed so CI failures can be debugged from the job log alone
+    # (config.log is not otherwise uploaded). Conftest compile/link/run
+    # evidence lines tell link errors vs. runtime failures (e.g. $? = 139).
+    echo -e "${YELLOW}  ── build diagnostics ──${NC}"
+    echo "  gcc: $(gcc --version 2>/dev/null | head -1)"
+    echo "  ld:  $(ld --version 2>/dev/null | head -1)"
+    echo "  cwd: $(pwd)"
+    echo "  disk: $(df -h "$BUILD_DIR" 2>/dev/null | tail -1)"
+    shopt -s nullglob
+    for clog in "$PKG_DIR"/src/*/config.log "$PKG_DIR"/src/config.log; do
+        [ -f "$clog" ] || continue
+        echo "  >>> $clog"
+        grep -nE 'conftest|error:|Segmentation|cannot ' "$clog" | tail -25
+        echo "  ── tail of config.log ──"
+        tail -25 "$clog"
+    done
+    shopt -u nullglob
     exit 1
 fi
 
