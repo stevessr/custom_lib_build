@@ -167,75 +167,16 @@ jobs:
           fi
           ls -lh
 
-      # ── Upload combined repo to `latest` Release ───────────────────
-      # gh CLI is not available in this container — use curl + the REST
-      # API to delete, then the softprops action to create/upload.
-      - name: Delete previous latest release
+      # ── Incremental upload to `latest` Release ────────────────────
+      # publish-release.sh: 对比 version 元数据，只上传变化的包文件、
+      # 删除旧版本资产、最后重建 db；全 skip 时完全不触碰 release。
+      # 不再删除 release/tag（无 404 窗口期），同名资产先删再传（幂等）。
+      - name: Update latest release (incremental)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Delete the old release (lookup by tag), then the tag itself
-          # so the fresh release below starts clean
-          rid=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/latest" \
-            | jq -r '.id // empty' 2>/dev/null)
-          if [ -n "$rid" ]; then
-            echo "Deleting old latest release #$rid"
-            curl -fsSL -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$rid"
-          fi
-          curl -fsSL -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/refs/tags/latest" || true
-
-      - name: Compute release name
-        id: release-name
-        run: |
-          echo "value=Arch Lib Repository $(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-
-      - name: Write release body
-        run: |
-          cat > release-body.md <<EOF
-          ## arch_lib pacman repository
-
-          Daily build of AUR packages.
-
-          **Usage** — add to \`/etc/pacman.conf\`:
-          \`\`\`ini
-          [arch_lib]
-          SigLevel = Optional TrustAll
-          Server = $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/latest
-          \`\`\`
-
-          Then: \`sudo pacman -Sy && sudo pacman -S <package>\`
-
-          **Signing**: 若已配置 GPG_PRIVATE_KEY，包和数据库均带 \`.sig\` 签名。
-          导入公钥后可改用 \`SigLevel = Required DatabaseOptional\` 验证。
-          EOF
-
-      # softprops/action-gh-release = GitHub's own release action (JS,
-      # no gh CLI needed in the container). Globs that match nothing are
-      # ignored (fail_on_unmatched_files: false), so unsigned builds
-      # (no .sig files) still publish.
-      - name: Create new Release
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: latest
-          name: ${{ steps.release-name.outputs.value }}
-          body_path: release-body.md
-          files: |
-            repos/x86_64/*.pkg.tar.zst
-            repos/x86_64/*.pkg.tar.zst.sig
-            repos/x86_64/arch_lib.db
-            repos/x86_64/arch_lib.db.sig
-            repos/x86_64/arch_lib.db.tar.gz
-            repos/x86_64/arch_lib.db.tar.gz.sig
-            repos/x86_64/arch_lib.files
-            repos/x86_64/arch_lib.files.sig
-            repos/x86_64/arch_lib.files.tar.gz
-            repos/x86_64/arch_lib.files.tar.gz.sig
-            release-metadata/version-*.txt
-            release-metadata/manifest-*.txt
-            arch_lib.pub.asc
-          fail_on_unmatched_files: false
+          bash scripts/publish-release.sh \
+            "$GITHUB_WORKSPACE/repos/x86_64" \
+            "$GITHUB_WORKSPACE/release-metadata" \
+            "$GITHUB_WORKSPACE/arch_lib.pub.asc" \
+            "$GH_TOKEN"
