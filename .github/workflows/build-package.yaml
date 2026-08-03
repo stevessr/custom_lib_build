@@ -5,13 +5,20 @@
 #   - build-repo.yaml   (matrix, daily cron)
 #   - manual-build.yaml (workflow_dispatch)
 #
+# 流程（版本判断前置，避免无谓的重流程）：
+#   1. check-version  — 轻量 ubuntu job（无容器）：custom/-git/普通包版本
+#                       判断 + 与 latest 已发布版本对比
+#   2. build          — 仅当需要重建时运行（arch-builder 容器 + pacman 增量
+#                       升级 + makepkg 构建）
+#   3. reuse          — 仅当版本未变化时运行：无容器，从 latest 下载旧包
+#                       文件重新上传 artifact（仓库数据库保持不变）
+#
+# 任一版本判断失败（网络抖动等）都保守地走构建路径：包永远不会因为
+# 判断错误而从仓库消失。
+#
 # The build job does not publish a per-package Release. It uploads package
 # files plus version/manifest metadata as an Actions artifact; the publish
 # job combines every artifact into the `latest` pacman repository Release.
-#
-# -git packages: upstream commit (git ls-remote) is compared against the
-# version metadata from the previous `latest` Release; unchanged packages
-# download their previous files from `latest` and upload them again.
 # =============================================================================
 
 name: Build Package
@@ -28,7 +35,32 @@ permissions:
   packages: read
 
 jobs:
+  # ── 版本预判：重流程（容器/升级/构建）之前完成 ────────────────────
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_build: ${{ steps.check.outputs.needs_build }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version before heavy build
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/check-version.sh "${{ inputs.package }}" \
+            "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/check-${{ inputs.package }}.env"
+          # shellcheck source=/dev/null
+          source "$GITHUB_WORKSPACE/check-${{ inputs.package }}.env"
+          echo "needs_build=${needs_build}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Decision for ${{ inputs.package }}: needs_build=$needs_build version=$version"
+
   build:
+    needs: check-version
+    # check-version 失败（failure()）时也照常构建——保守，不丢包
+    if: ${{ !cancelled() && (failure() || needs.check-version.outputs.needs_build == 'true') }}
     runs-on: ubuntu-latest
     container:
       # 每日预构建镜像（build-arch-builder-image.yaml 维护），已含
@@ -193,6 +225,94 @@ jobs:
           done
           cp "$version_file" "$manifest_file" "$artifact_dir/"
           echo "Package artifact contents:"
+          ls -lh "$artifact_dir"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ inputs.package }}
+          path: package-artifact
+          compression-level: 0
+          if-no-files-found: error
+
+  # ── 版本未变化：无容器轻量复用旧包（不启动 arch 容器）─────────────
+  reuse:
+    needs: check-version
+    if: ${{ needs.check-version.result == 'success' && needs.check-version.outputs.needs_build == 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reuse package files from latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          package="${{ inputs.package }}"
+          base_url="https://github.com/$GITHUB_REPOSITORY/releases/download/latest"
+          manifest="$GITHUB_WORKSPACE/manifest-${package}.txt"
+          version_file="$GITHUB_WORKSPACE/version-${package}.txt"
+          repo_dir="$GITHUB_WORKSPACE/repos/x86_64"
+
+          # 下载上次发布的 manifest + version 元数据
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$base_url/manifest-${package}.txt" -o "$manifest"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$base_url/version-${package}.txt" -o "$version_file"
+          echo "Reusing version: $(cat "$version_file")"
+
+          # 按 manifest 逐个下载包文件（重试 + 断点续传）
+          mkdir -p "$repo_dir"
+          while IFS= read -r filename; do
+            [ -n "$filename" ] || continue
+            case "$filename" in
+              *.pkg.tar.zst) ;;
+              *) echo "Invalid package filename in manifest: $filename"; exit 1 ;;
+            esac
+            case "$filename" in
+              */*|*..*) echo "Unsafe package filename in manifest: $filename"; exit 1 ;;
+            esac
+
+            dest="$repo_dir/$filename"
+            partial="${dest}.part"
+            echo "  ↓ $filename (resumable)"
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              --continue-at - -H "Authorization: Bearer $GH_TOKEN" \
+              -o "$partial" "$base_url/$filename"
+            mv -f "$partial" "$dest"
+          done < "$manifest"
+
+          if ! compgen -G "$repo_dir/*.pkg.tar.zst" >/dev/null; then
+            echo "No package files restored for $package"
+            exit 1
+          fi
+
+      # ── Stage package artifact（与 build job 的产物结构一致）──────
+      - name: Stage package artifact
+        run: |
+          package="${{ inputs.package }}"
+          repo_dir="$GITHUB_WORKSPACE/repos/x86_64"
+          artifact_dir="$GITHUB_WORKSPACE/package-artifact"
+          version_file="$GITHUB_WORKSPACE/version-${package}.txt"
+          manifest_file="$GITHUB_WORKSPACE/manifest-${package}.txt"
+
+          rm -rf "$artifact_dir"
+          mkdir -p "$artifact_dir"
+          mapfile -t package_files < <(
+            find "$repo_dir" -maxdepth 1 -type f -name '*.pkg.tar.zst' -printf '%f\n' | sort
+          )
+          if [ "${#package_files[@]}" -eq 0 ]; then
+            echo "No package files available for $package"
+            exit 1
+          fi
+
+          printf '%s\n' "${package_files[@]}" > "$manifest_file"
+          for filename in "${package_files[@]}"; do
+            cp "$repo_dir/$filename" "$artifact_dir/"
+          done
+          cp "$version_file" "$manifest_file" "$artifact_dir/"
+          echo "Reused package artifact contents:"
           ls -lh "$artifact_dir"
 
       - name: Upload package artifact
