@@ -44,6 +44,14 @@ for dep in "${AUR_ONLY_DEPS[@]}"; do
     sed -i "/^[[:space:]]*'${dep}'[[:space:]]*$/d" "$PKGBUILD"
 done
 
+# --with-dmalloc 必须一并移除：ImageMagick 的 configure 在探测 dmalloc 后
+# 会无条件把 -ldmalloc 加入 LIBS（即使库不存在，链接失败也不回退），从而
+# 污染后续所有 conftest 链接 —— 典型症状是所有 AC_CHECK_SIZEOF 报
+# "cannot compute sizeof"，config.log 里每个 gcc 链接行都有
+# "/usr/bin/ld: cannot find -ldmalloc"。其余缺失库（flif/fpx/umem 等）的
+# configure 探测都是安全降级的，不会污染 LIBS，因此只需要处理 dmalloc。
+sed -i '/^[[:space:]]*--with-dmalloc[[:space:]]*\\$/d' "$PKGBUILD"
+
 # 校验：真实解析 depends/makedepends 数组（depends 定义在 package_*()
 # 函数体内，不能只靠顶层 source）。提取出数组文本后用 eval 求值，再对
 # 求值结果做精确匹配。若上游把数组改成单行格式（行级 sed 漏删），这里
