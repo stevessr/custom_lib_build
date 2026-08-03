@@ -76,10 +76,12 @@ if [ "$IS_CUSTOM" -eq 1 ]; then
 else
     # Determine the AUR git repo name (PackageBase): split packages like
     # rustrover-jre live in the rustrover.git repo. Query AUR RPC.
+    # Failure is non-fatal (fall back to $PKG) — a transient network blip
+    # must not kill the whole build via the pipefail below.
     AUR_REPO="$PKG"
-    BASE_INFO=$(curl -fsSL --max-time 10 \
+    BASE_INFO=$(curl -fsSL --max-time 10 --retry 5 --retry-all-errors --retry-delay 2 \
         "https://aur.archlinux.org/rpc/v5/info?arg[]=$PKG" 2>/dev/null \
-        | jq -r '.results[0].PackageBase // empty' 2>/dev/null)
+        | jq -r '.results[0].PackageBase // empty' 2>/dev/null) || true
     if [ -n "$BASE_INFO" ] && [ "$BASE_INFO" != "$PKG" ]; then
         AUR_REPO="$BASE_INFO"
         echo -e "${YELLOW}  Split package: cloning $AUR_REPO.git (base of $PKG)${NC}"
