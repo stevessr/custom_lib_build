@@ -17,6 +17,9 @@ qbittorrent-enhanced
 herdr-bin
 libumem-git
 imagemagick-full
+uxedo-control-center-bin
+mechrevo-drivers-dkms
+tuxedo-drivers-dkms
 
 # Lifeboat?
 warp-plus-bin
