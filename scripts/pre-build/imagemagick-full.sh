@@ -74,6 +74,9 @@ build_from_aur() {
     # makepkg 7.1 把 BUILDENV 声明为 readonly，部分 AUR PKGBUILD（如
     # autotrace-nomagick）会 `BUILDENV+=('!check')` 直接报错。删掉该行。
     sed -i '/^[[:space:]]*BUILDENV/d' "$d/PKGBUILD"
+    # 部分 AUR 源文件托管在 imagemagick.org/archive/ 但该目录已不复存在
+    # （libfpx 等）。尝试用 archive.org 回退获取。
+    sed -i 's|https://imagemagick\.org/archive/delegates/|https://web.archive.org/web/2020id_/https://imagemagick.org/archive/delegates/|g' "$d/PKGBUILD"
     # makepkg -s 会装该 AUR 包自己的依赖（官方 + 本仓均可解析）
     if ! ( cd "$d" && makepkg -s --noconfirm --needed >"$logfile" 2>&1 ); then
         echo "  [hook] ✗ makepkg failed for AUR dep $p — log tail:" >&2
