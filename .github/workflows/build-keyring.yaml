@@ -24,21 +24,27 @@ on:
 
 permissions:
   contents: write
+  packages: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: archlinux:latest
+      # 每日预构建镜像（build-arch-builder-image.yaml 维护），已含
+      # base-devel / git / sudo / jq；credentials 允许拉取私有 GHCR 包
+      image: ghcr.io/${{ github.repository }}/arch-builder:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       options: --user root
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Initialize Arch system
+      - name: Incremental system upgrade
         run: |
+          # arch-builder 镜像每日维护，只做增量升级（命中镜像层缓存）
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel git sudo jq
 
       - name: Setup builder user
         run: |

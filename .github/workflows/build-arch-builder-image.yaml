@@ -1,0 +1,64 @@
+# =============================================================================
+# Build Arch Builder Image — 每日维护预构建的 Arch 构建环境镜像
+#
+# 每日 02:30 UTC 构建并推送 ghcr.io/<owner>/custom_lib_build/arch-builder:
+#   - latest        （CI workflow 引用的滚动 tag）
+#   - YYYYMMDD      （按日期固化，便于回滚）
+#
+# CI 构建 job（build-package/publish-repo/build-keyring）改用此镜像后，
+# 不再每次从公共 mirror 下载 base-devel（~850MB），改为每日一次在镜像
+# 构建时完成，公共资源压力降到最低。
+#
+# 首次使用：仓库 → Packages → custom_lib_build/arch-builder → 设为
+# Public（或保持 Private——workflow 已配置 container.credentials 用
+# GITHUB_TOKEN 拉取，需对应 workflow 的 packages: read 权限）。
+# =============================================================================
+
+name: Build Arch Builder Image
+
+on:
+  schedule:
+    # 每日 02:30 UTC（主仓库构建 00:00 / keyring 01:00 之后）
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - 'Dockerfile'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute date tag
+        id: meta
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/arch-builder:latest
+            ghcr.io/${{ github.repository }}/arch-builder:${{ steps.meta.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
