@@ -6,7 +6,8 @@
 # 也可由 manual-publish.yaml 调用并传入 build-run-id，从指定的历史构建
 # run 下载 artifacts 重新发布（如上次发布失败时重试）。
 #
-# 需要 secrets（inherit 传递）：
+# secrets 由调用方 `secrets: inherit` 传入（on.workflow_call 无需声明，
+# 官方语法只支持命名 secrets 列表）：
 #   GITHUB_TOKEN（自动）  GPG_PRIVATE_KEY（可选，签名）
 # =============================================================================
 
@@ -19,8 +20,6 @@ on:
       build-run-id:
         type: string
         required: false
-    secrets:
-      inherit: true
 
 permissions:
   contents: write
