@@ -60,6 +60,26 @@ sudo pacman -Sy --noconfirm >/tmp/aur-deps/pacman-sy.log 2>&1 || {
 }
 
 # ── 2. 依次安装 7 个依赖：本仓优先，否则 AUR 构建回退 ──────────────
+# 按包的源补丁（prepare() 注入 / 源 URL 修复等），在 makepkg 前执行。
+# 扩展此函数以处理更多 AUR 包的编译兼容性问题。
+patch_aur_pkgbuild() {
+    local p="$1" d="$2"
+    case "$p" in
+        pstoedit-nomagick)
+            # g++16 + -std=gnu++11: constexpr 函数体必须单一 return 语句。
+            # 注入 prepare() 在 build() 前修补 fillpoly.cpp，移除 constexpr。
+            if ! grep -q '^prepare()' "$d/PKGBUILD" 2>/dev/null; then
+                cat >> "$d/PKGBUILD" <<'PREPARE_EOF'
+prepare() {
+    cd "pstoedit-${pkgver}"
+    sed -i 's/^constexpr int octant(double a, double b)/int octant(double a, double b)/' src/fillpoly.cpp
+}
+PREPARE_EOF
+            fi
+            ;;
+    esac
+}
+
 build_from_aur() {
     local p="$1"
     local d="$AUR_DEPS_DIR/$p"
@@ -77,6 +97,7 @@ build_from_aur() {
     # 部分 AUR 源文件托管在 imagemagick.org/archive/ 但该目录已不复存在
     # （libfpx 等）。尝试用 archive.org 回退获取。
     sed -i 's|https://imagemagick\.org/archive/delegates/|https://web.archive.org/web/2020id_/https://imagemagick.org/archive/delegates/|g' "$d/PKGBUILD"
+    patch_aur_pkgbuild "$p" "$d"
     # makepkg -s 会装该 AUR 包自己的依赖（官方 + 本仓均可解析）。
     # --skippgpcheck：容器连不上 keyserver，且 sha256 已校验通过，
     # PGP 签名校验在此环境无意义。
