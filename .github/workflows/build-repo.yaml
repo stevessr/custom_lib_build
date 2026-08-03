@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: write
+  packages: read
 
 jobs:
   # ── Prepare: parse package list ────────────────────────────────────
