@@ -208,7 +208,21 @@ cp "$MAKEPKG_BASE_CONFIG" "$MAKEPKG_CONFIG"
 printf '\n# arch_lib package-size policy\nPKGEXT=.pkg.tar.zst\nCOMPRESSZST=(zstd -c -T0 -%s -)\n' \
     "$PACKAGE_ZSTD_LEVEL" >> "$MAKEPKG_CONFIG"
 
-if ! makepkg --config "$MAKEPKG_CONFIG" -s --noconfirm --needed 2>&1 | sed 's/^/  /'; then
+# ── 注册本仓 pacman 源：让包的 depends/makedepends 里的本仓包也能被
+# makepkg -s 解析（例如 autotrace-nomagick→pstoedit-nomagick）。幂等。
+# 容器是一次性构建环境，SigLevel=Never 只为解析用，不影响终端用户。
+if ! grep -q '^\[arch_lib\]$' /etc/pacman.conf 2>/dev/null; then
+    {
+        printf '\n[arch_lib]\n'
+        printf 'SigLevel = Never\n'
+        printf 'Server = https://github.com/%s/releases/download/latest\n' "${GITHUB_REPOSITORY:-stevessr/custom_lib_build}"
+    } | sudo -n tee -a /etc/pacman.conf >/dev/null 2>&1 || true
+    sudo -n pacman -Sy --noconfirm >/dev/null 2>&1 || true
+fi
+
+# --skippgpcheck：容器连不上 keyserver，且 sha256 已校验通过（PGP
+# 签名校验在此环境无意义，但对部分 AUR 包会直接中断构建）。
+if ! makepkg --config "$MAKEPKG_CONFIG" -s --noconfirm --needed --skippgpcheck 2>&1 | sed 's/^/  /'; then
     echo -e "${RED}  ✗ Build failed for $PKG${NC}"
     # ── Diagnostics: toolchain + failing configure logs ──────────────
     # Printed so CI failures can be debugged from the job log alone

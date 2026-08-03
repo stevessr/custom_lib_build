@@ -17,6 +17,14 @@ qbittorrent-enhanced
 herdr-bin
 libumem-git
 imagemagick-full
+
+# imagemagick-full 的 AUR-only 依赖（供其 depends 在本仓解析，见各预构建钩子）
+autotrace-nomagick
+magickcache-git
+dmalloc
+flif
+libfpx
+pstoedit-nomagick
 uxedo-control-center-bin
 mechrevo-drivers-dkms
 tuxedo-drivers-dkms
