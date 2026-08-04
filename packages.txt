@@ -101,6 +101,9 @@ noctalia
 noctalia-greeter
 sddm-theme-noctalia-git
 
+# Minecraft
+glfw-wayland-minecraft-cursorfix
+
 # Custom PKGBUILD (GitHub release 原生构建，见 custom-pkgs/ 目录)
 claude-code
 cscience-bin
