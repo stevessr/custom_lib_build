@@ -61,14 +61,20 @@ jobs:
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "Syncing to: $TARGET"
 
+      - name: Install AWS CLI
+        if: ${{ env.S3_ENABLED == 'true' }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq awscli
+
       - name: Sync to S3 (--delete removes stale objects)
         if: ${{ env.S3_ENABLED == 'true' }}
-        uses: aws-actions/aws-s3-sync@v1
-        with:
-          aws-region: ${{ secrets.S3_REGION || 'us-east-1' }}
-          aws-access-key-id: ${{ secrets.S3_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-          endpoint-url: ${{ secrets.S3_ENDPOINT }}
-          source-dir: staging
-          dest-dir: ${{ steps.target.outputs.target }}
-          additional-flags: --delete
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.S3_REGION || 'us-east-1' }}
+        run: |
+          # aws-actions/aws-s3-sync 不存在（调研失误）——改用官方 AWS CLI
+          aws s3 sync staging "${{ steps.target.outputs.target }}" \
+            --endpoint-url "${{ secrets.S3_ENDPOINT }}" \
+            --delete --no-progress
+          echo "--- S3 sync done: $(aws s3 ls "${{ steps.target.outputs.target }}" --endpoint-url "${{ secrets.S3_ENDPOINT }}" | wc -l) objects"
