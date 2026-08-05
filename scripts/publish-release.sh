@@ -7,8 +7,12 @@
 #      （此前每次发布都删除全部 ~110 资产再上传 ~7.5GB）
 #   2. 不删除 release/tag——只增删资产，消除 pacman 用户的 404 窗口期
 #   3. 全部包版本未变化且资产齐全时，完全不触碰 release
-#   4. 顺序保证：先传新包文件 → 删除旧版本资产 → 最后重建 db 资产，
-#      pacman 用户始终能拿到一致状态
+#   4. 顺序保证：先传新包文件 + 配套 .sig → 删除旧版本资产 → 最后
+#      重建 db 资产，pacman 用户始终能拿到一致状态
+#   5. 包文件的 .sig 必须与包文件同批上传：repo-add 入库时引用的是
+#      当前构建的 .sig，若只重传包文件而保留 release 上旧的 .sig，
+#      pacman 会报 BADSIG（custom 包每次重建字节不同，旧 .sig 必然
+#      失配）。
 #
 # 版本判定（与 check-version.sh 的 version 文件对比）：
 #   - 版本变化的包：其所有包文件强制"删同名 + 重传"（custom 包如
@@ -177,12 +181,19 @@ for mf in "$META_DIR"/manifest-*.txt; do
         done <<< "$old_mf"
     fi
 
-    # 删除同名旧资产 → 并发上传新文件（子进程仅依赖已 export 的环境）
+    # 删除同名旧资产 → 并发上传新文件 + 配套 .sig（子进程仅依赖已 export 的环境）
+    # 必须与包文件同批处理 .sig：repo-add 的 db 引用的是当前构建的 .sig，
+    # 若只重传包文件而保留 release 上旧的 .sig，pacman 校验会报 BADSIG
+    # （custom 包每次重建字节不同——.PKGINFO builddate 变化——旧 .sig 必然失配）。
     to_upload=()
     for pf in "${new_files[@]}"; do
         [ -f "$REPO_DIR/$pf" ] || { echo "  ✗ missing file: $REPO_DIR/$pf"; exit 1; }
         delete_asset "$pf"
         to_upload+=("$REPO_DIR/$pf")
+        if [ -f "$REPO_DIR/$pf.sig" ]; then
+            delete_asset "$pf.sig"
+            to_upload+=("$REPO_DIR/$pf.sig")
+        fi
     done
     if [ "${#to_upload[@]}" -gt 0 ]; then
         printf '%s\n' "${to_upload[@]}" | xargs -P 6 -I{} bash -c 'upload_asset "$(basename "{}")" "{}"'
