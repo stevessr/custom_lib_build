@@ -109,13 +109,17 @@ for vf in "$META_DIR"/version-*.txt; do
         CHANGED_PKGS["$pkg"]=1
         need_publish=1
     fi
-    # 包文件资产必须存在（版本未变的包）
+    # 包文件资产必须存在（版本未变的包）；.sig 缺失也要补齐
     mf_name="manifest-${pkg}.txt"
     if [ -f "$META_DIR/$mf_name" ]; then
         while IFS= read -r pf; do
             [ -n "$pf" ] || continue
             if [ -z "${ASSET_IDS[$pf]:-}" ]; then
                 echo "  missing asset: $pf"
+                need_publish=1
+            fi
+            if [ -f "$REPO_DIR/$pf.sig" ] && [ -z "${ASSET_IDS[$pf.sig]:-}" ]; then
+                echo "  missing .sig asset: $pf.sig"
                 need_publish=1
             fi
         done < "$META_DIR/$mf_name"
@@ -193,13 +197,17 @@ for mf in "$META_DIR"/manifest-*.txt; do
         if [ -f "$REPO_DIR/$pf.sig" ]; then
             delete_asset "$pf.sig"
             to_upload+=("$REPO_DIR/$pf.sig")
+        else
+            # 本次构建未签名：清掉 release 上的旧 .sig，避免 pacman
+            # 用旧签名校验新文件（BADSIG）
+            delete_asset "$pf.sig"
         fi
     done
     if [ "${#to_upload[@]}" -gt 0 ]; then
         printf '%s\n' "${to_upload[@]}" | xargs -P 6 -I{} bash -c 'upload_asset "$(basename "{}")" "{}"'
     fi
 
-    # 删除旧版本文件（不在新清单中）+ 其 .sig
+    # 旧版本文件清理（不在新清单中）
     for pf in "${old_files[@]}"; do
         keep=0
         for nf in "${new_files[@]}"; do
@@ -209,6 +217,22 @@ for mf in "$META_DIR"/manifest-*.txt; do
         delete_asset "$pf"
         delete_asset "$pf.sig"
     done
+done
+
+# ── 5b. 补齐缺失的 .sig（版本未变的包也可能缺：早期脚本只传包文件）─
+for mf in "$META_DIR"/manifest-*.txt; do
+    [ -f "$mf" ] || continue
+    pkg=$(basename "$mf" | sed 's/^manifest-//; s/\.txt$//')
+    # step 5 已处理 changed 包的 .sig，无需重复
+    [ -z "${CHANGED_PKGS[$pkg]:-}" ] || continue
+    while IFS= read -r pf; do
+        [ -n "$pf" ] || continue
+        [ -f "$REPO_DIR/$pf.sig" ] || continue
+        if [ -z "${ASSET_IDS[$pf.sig]:-}" ]; then
+            echo "  backfilling .sig: $pf.sig"
+            upload_asset "$pf.sig" "$REPO_DIR/$pf.sig"
+        fi
+    done < "$mf"
 done
 
 # ── 6. 元数据（version/manifest，小文件，同名覆盖）──────────────────
