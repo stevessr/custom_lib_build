@@ -60,8 +60,9 @@ AUR 之外的软件可以在 `custom-pkgs/<包名>/PKGBUILD` 提供自定义构�
 
 ```
 custom-pkgs/
-├── claude-code/PKGBUILD   # Claude Code for Node.js（从 CometixSpace/claude-code Release 获取）
-└── cscience-bin/PKGBUILD  # Claude Science BYOK（从 Haleclipse/cscience Release 获取，需 bun）
+├── cherry-studio-bin/PKGBUILD  # Cherry Studio 桌面客户端（AppImage，从 CherryHQ/cherry-studio Release 获取）
+├── claude-code/PKGBUILD        # Claude Code for Node.js（从 CometixSpace/claude-code Release 获取）
+└── cscience-bin/PKGBUILD       # Claude Science BYOK（从 Haleclipse/cscience Release 获取，需 bun）
 ```
 
 自定义包使用 `pkgver()` 动态获取最新版本号，从上游 GitHub Release 直接下载原生 tarball 构建，无需 npm。
@@ -200,6 +201,7 @@ arch_lib/
 ├── assets/                    # 项目标识
 │   └── arch-lib-icon.png      # GitHub 仓库头像/社交预览用 PNG
 ├── custom-pkgs/              # 自定义 PKGBUILD（优先于 AUR）
+│   ├── cherry-studio-bin/PKGBUILD  # 从 CherryHQ/cherry-studio Release 下载 AppImage
 │   ├── claude-code/PKGBUILD  # 从 CometixSpace/claude-code Release 下载
 │   └── cscience-bin/PKGBUILD # 从 Haleclipse/cscience Release 下载（原生 Bun）
 ├── packages.txt              # 要构建的包列表（AUR 或 custom-pkgs）

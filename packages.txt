@@ -17,6 +17,7 @@ qbittorrent-enhanced
 herdr-bin
 libumem-git
 imagemagick-full
+hw-probe
 
 # imagemagick-full 的 AUR-only 依赖（供其 depends 在本仓解析，见各预构建钩子）
 autotrace-nomagick
@@ -70,7 +71,6 @@ ccline-bin
 cc-switch-bin
 claude-desktop
 pi-coding-agent
-cherry-studio-bin
 
 ## remote
 paseo-desktop-bin
@@ -107,3 +107,4 @@ glfw-wayland-minecraft-cursorfix
 # Custom PKGBUILD (GitHub release 原生构建，见 custom-pkgs/ 目录)
 claude-code
 cscience-bin
+cherry-studio-bin
