@@ -13,6 +13,11 @@
 #      当前构建的 .sig，若只重传包文件而保留 release 上旧的 .sig，
 #      pacman 会报 BADSIG（custom 包每次重建字节不同，旧 .sig 必然
 #      失配）。
+#   6. split 包共享同名文件（rustrover/rustrover-jre 的 manifest 都包含
+#      rustrover-*.pkg.tar.zst）：本轮已上传成功的资产名全 run 去重，
+#      避免对同名资产重复 delete+upload 触发 GitHub 422（asset already
+#      exists）；上传返回的 asset id 同步回填 ASSET_IDS，防止后续同名
+#      delete 因 map 过期而 no-op。
 #
 # 版本判定（与 check-version.sh 的 version 文件对比）：
 #   - 版本变化的包：其所有包文件强制"删同名 + 重传"（custom 包如
@@ -98,6 +103,7 @@ echo "Existing assets: ${#ASSET_IDS[@]}"
 
 # ── 3. 版本对比：找出变化的包；资产齐全性校验 ──────────────────────
 declare -A CHANGED_PKGS=()
+declare -A MISSING_FILES=() # 版本未变但资产缺失（上次发布中断遗留）
 need_publish=0
 for vf in "$META_DIR"/version-*.txt; do
     [ -f "$vf" ] || continue
@@ -117,10 +123,12 @@ for vf in "$META_DIR"/version-*.txt; do
             if [ -z "${ASSET_IDS[$pf]:-}" ]; then
                 echo "  missing asset: $pf"
                 need_publish=1
+                MISSING_FILES["$pf"]=1
             fi
             if [ -f "$REPO_DIR/$pf.sig" ] && [ -z "${ASSET_IDS[$pf.sig]:-}" ]; then
                 echo "  missing .sig asset: $pf.sig"
                 need_publish=1
+                MISSING_FILES["$pf.sig"]=1
             fi
         done < "$META_DIR/$mf_name"
     fi
@@ -148,17 +156,36 @@ delete_asset() { # <name>
     fi
 }
 
+# 上传结果回传通道：xargs 并行子进程无法修改父 shell 的关联数组，
+# 成功时把 name<TAB>asset_id 追加到 UPLOAD_LOG，父进程 sync_uploaded
+# 合并进 UPLOADED（本轮去重）和 ASSET_IDS（保持 map 与 release 一致）。
+UPLOAD_LOG=$(mktemp)
+declare -A UPLOADED=()
+
 upload_asset() { # <name> <file>
     local name="$1" file="$2"
-    local encoded
+    local encoded resp id
     encoded=$(jq -rn --arg v "$name" '$v|@uri')
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+    resp=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
         -X POST -H "$AUTH" -H "Content-Type: application/octet-stream" \
-        --data-binary @"$file" "$UPLOAD/releases/$RELEASE_ID/assets?name=$encoded" \
-        -o /dev/null && echo "  uploaded: $name"
+        --data-binary @"$file" "$UPLOAD/releases/$RELEASE_ID/assets?name=$encoded") \
+        || { echo "  ✗ upload failed: $name"; return 1; }
+    id=$(printf '%s' "$resp" | jq -r '.id' 2>/dev/null || true)
+    printf '%s\t%s\n' "$name" "$id" >> "$UPLOAD_LOG"
+    echo "  uploaded: $name"
+}
+
+sync_uploaded() { # 合并子进程/本轮已完成的上传结果
+    [ -s "$UPLOAD_LOG" ] || return 0
+    while IFS=$'\t' read -r name id; do
+        [ -n "$name" ] || continue
+        UPLOADED["$name"]=1
+        ASSET_IDS["$name"]="$id"
+    done < "$UPLOAD_LOG"
+    : > "$UPLOAD_LOG"
 }
 export -f upload_asset
-export TOKEN RELEASE_ID UPLOAD AUTH
+export TOKEN RELEASE_ID UPLOAD AUTH UPLOAD_LOG
 
 # ── 5. 逐包：版本变化的包强制重传全部新文件 + 清理旧文件 ───────────
 for mf in "$META_DIR"/manifest-*.txt; do
@@ -192,6 +219,13 @@ for mf in "$META_DIR"/manifest-*.txt; do
     to_upload=()
     for pf in "${new_files[@]}"; do
         [ -f "$REPO_DIR/$pf" ] || { echo "  ✗ missing file: $REPO_DIR/$pf"; exit 1; }
+        if [ -n "${UPLOADED[$pf]:-}" ]; then
+            # split 包（rustrover/rustrover-jre）的 manifest 共享同名文件：
+            # 本轮已上传成功，REPO_DIR 内同名即同一文件（.sig 也已同批处理），
+            # 再删再传只会撞 GitHub 422（asset already exists）
+            echo "  already uploaded this run: $pf (+sig)"
+            continue
+        fi
         delete_asset "$pf"
         to_upload+=("$REPO_DIR/$pf")
         if [ -f "$REPO_DIR/$pf.sig" ]; then
@@ -204,7 +238,19 @@ for mf in "$META_DIR"/manifest-*.txt; do
         fi
     done
     if [ "${#to_upload[@]}" -gt 0 ]; then
-        printf '%s\n' "${to_upload[@]}" | xargs -P 6 -I{} bash -c 'upload_asset "$(basename "{}")" "{}"'
+        # xargs 任一子进程失败返回 123；先吞掉避免 set -e 直接杀死脚本，
+        # 由下面的 sync + 校验统一判定失败并给出可读错误
+        printf '%s\n' "${to_upload[@]}" | xargs -P 6 -I{} bash -c 'upload_asset "$(basename "{}")" "{}"' || true
+        sync_uploaded
+        # 上传必须全部成功：旧资产已删，若有失败立即中止（rerun 幂等，
+        # 下次运行从 release 现状重查资产并补传）
+        for f in "${to_upload[@]}"; do
+            n=$(basename "$f")
+            if [ -z "${UPLOADED[$n]:-}" ]; then
+                echo "  ✗ upload failed: $n — aborting (rerun to retry)"
+                exit 1
+            fi
+        done
     fi
 
     # 旧版本文件清理（不在新清单中）
@@ -234,6 +280,21 @@ for mf in "$META_DIR"/manifest-*.txt; do
         fi
     done < "$mf"
 done
+sync_uploaded
+
+# ── 5c. 补齐缺失的包文件（版本未变但资产缺失：上次发布可能中断在
+# 删除之后/上传之前，db 重建后该包会 404，必须补传）──────────────────
+for name in "${!MISSING_FILES[@]}"; do
+    f="$REPO_DIR/$name"
+    [ -f "$f" ] || { echo "  ✗ missing file in repo: $f"; exit 1; }
+    if [ -n "${ASSET_IDS[$name]:-}" ]; then
+        # 本轮前面步骤已补齐（changed 包重传 / split 包去重路径）
+        continue
+    fi
+    echo "  backfilling asset: $name"
+    upload_asset "$name" "$f"
+done
+sync_uploaded
 
 # ── 6. 元数据（version/manifest，小文件，同名覆盖）──────────────────
 for mf in "$META_DIR"/*.txt; do
