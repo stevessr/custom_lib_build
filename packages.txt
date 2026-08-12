@@ -80,6 +80,7 @@ antigravity
 
 ## openAI
 openai-codex-bin
+openai-codex-desktop
 
 ## Alibaba
 qoder-cli
