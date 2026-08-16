@@ -141,6 +141,29 @@ for db in arch_lib.db arch_lib.db.tar.gz arch_lib.files arch_lib.files.tar.gz; d
     fi
 done
 
+# db 引用完整性：release 上的 db 引用的每个包文件必须实际存在。
+# publish 中断在“删除旧资产后 / db 重建前”会造成悬空引用（如 rustrover
+# 2026.2-1 已删而 db 仍指向它），pacman 用户会 404；即使全部包版本
+# 未变也必须强制重发布重建 db。
+if [ -n "${ASSET_IDS[arch_lib.db.tar.gz]:-}" ]; then
+    db_tmp=$(mktemp)
+    if curl -fsSL --max-time 30 --retry 3 --retry-all-errors --retry-delay 2 \
+        -H "$AUTH" "$DOWNLOAD/arch_lib.db.tar.gz" -o "$db_tmp" 2>/dev/null; then
+        while IFS= read -r entry; do
+            fn=$(bsdtar -xOf "$db_tmp" "$entry" 2>/dev/null \
+                | awk '/^%FILENAME%$/{getline; print; exit}')
+            [ -n "$fn" ] || continue
+            if [ -z "${ASSET_IDS[$fn]:-}" ]; then
+                echo "  db references missing asset: $fn"
+                need_publish=1
+            fi
+        done < <(bsdtar -tf "$db_tmp" 2>/dev/null | grep '/desc$' || true)
+    else
+        echo "  ⚠ db download failed — skipping integrity check"
+    fi
+    rm -f "$db_tmp"
+fi
+
 if [ "$need_publish" -eq 0 ]; then
     echo "== All package versions unchanged and assets complete — release untouched =="
     exit 0

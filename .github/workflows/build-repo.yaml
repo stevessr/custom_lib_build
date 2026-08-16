@@ -27,7 +27,7 @@ permissions:
   packages: read
 
 jobs:
-  # ── Prepare: parse package list ────────────────────────────────────
+  # ── Prepare: parse package list + split 包去重 ────────────────────
   prepare:
     runs-on: ubuntu-latest
     outputs:
@@ -38,9 +38,51 @@ jobs:
       - name: Generate matrix from packages.txt
         id: gen-matrix
         run: |
-          packages=$(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' packages.txt | grep -v '^$' | jq -R . | jq -s -c .)
-          echo "matrix=${packages}" >> "$GITHUB_OUTPUT"
-          echo "Packages: $packages"
+          mapfile -t pkgs < <(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' packages.txt | grep -v '^$')
+
+          # 解析 AUR PackageBase：split 包（rustrover / rustrover-jre）共享
+          # 同一 PKGBUILD，一次 makepkg 产出全部子包。矩阵只保留每个 base
+          # 在 packages.txt 中的第一个包名，同族版本/资产元数据由构建
+          # （或复用）job 一并产出，避免重复下载 ~1GB 源码 + 重复构建。
+          declare -A base_of=()
+          : > /tmp/aur-bases.txt
+          for ((i=0; i<${#pkgs[@]}; i+=40)); do
+            args=()
+            for pkg in "${pkgs[@]:i:40}"; do
+              args+=(--data-urlencode "arg[]=$pkg")
+            done
+            curl -G -fsSL --max-time 30 --retry 3 --retry-all-errors --retry-delay 2 \
+              "${args[@]}" "https://aur.archlinux.org/rpc/v5/info" 2>/dev/null \
+              | jq -r '.results[]? | "\(.Name)\t\(.PackageBase)"' 2>/dev/null || true
+          done >> /tmp/aur-bases.txt
+          while IFS=$'\t' read -r name base; do
+            [ -n "$name" ] && base_of["$name"]="$base"
+          done < /tmp/aur-bases.txt
+
+          declare -A seen_base=()
+          kept=()
+          for pkg in "${pkgs[@]}"; do
+            # custom 包总是重建，不参与去重
+            if [ -f "custom-pkgs/$pkg/PKGBUILD" ]; then
+              kept+=("$pkg")
+              continue
+            fi
+            base="${base_of[$pkg]:-}"
+            if [ -n "$base" ] && [ -n "${seen_base[$base]:-}" ]; then
+              echo "  dedup: $pkg (same PackageBase $base — covered by sibling)"
+              continue
+            fi
+            [ -n "$base" ] && seen_base["$base"]=1
+            kept+=("$pkg")
+          done
+
+          if [ "${#kept[@]}" -eq 0 ]; then
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s\n' "${kept[@]}" | jq -R . | jq -s -c . > /tmp/matrix.json
+          echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
+          echo "Packages: ${#kept[@]} (dedup'd from ${#pkgs[@]})"
 
   # ── Build: one job per package (reusable workflow) ─────────────────
   build:

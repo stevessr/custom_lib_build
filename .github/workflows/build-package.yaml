@@ -7,11 +7,18 @@
 #
 # 流程（版本判断前置，避免无谓的重流程）：
 #   1. check-version  — 轻量 ubuntu job（无容器）：custom/-git/普通包版本
-#                       判断 + 与 latest 已发布版本对比
+#                       判断。普通包：version 文件一致即复用；不一致时
+#                       HEAD 探测 latest 资产（publish 中断留下的中间态
+#                       可自愈，无需重建）；-git 对比 commit hash。
 #   2. build          — 仅当需要重建时运行（arch-builder 容器 + pacman 增量
-#                       升级 + makepkg 构建）
-#   3. reuse          — 仅当版本未变化时运行：无容器，从 latest 下载旧包
-#                       文件重新上传 artifact（仓库数据库保持不变）
+#                       升级 + makepkg 构建；split 包一次产出全部子包）
+#   3. reuse          — 仅当版本未变化时运行：无容器，以 release 资产清单
+#                       为准下载旧包文件（不信任可能过期的 manifest），并
+#                       用 check-version 的当前版本重写 version 元数据
+#                       （split 同族一并刷新）→ 中间态自愈
+#
+# build-repo.yaml 的矩阵已按 AUR PackageBase 去重：split 包（rustrover /
+# rustrover-jre）只保留一个条目，避免重复下载/构建。
 #
 # 任一版本判断失败（网络抖动等）都保守地走构建路径：包永远不会因为
 # 判断错误而从仓库消失。
@@ -41,6 +48,7 @@ jobs:
     outputs:
       needs_build: ${{ steps.check.outputs.needs_build }}
       version: ${{ steps.check.outputs.version }}
+      pkgname: ${{ steps.check.outputs.pkgname }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +63,8 @@ jobs:
           source "$GITHUB_WORKSPACE/check-${{ inputs.package }}.env"
           echo "needs_build=${needs_build}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "Decision for ${{ inputs.package }}: needs_build=$needs_build version=$version"
+          echo "pkgname=${pkgname:-}" >> "$GITHUB_OUTPUT"
+          echo "Decision for ${{ inputs.package }}: needs_build=$needs_build version=$version pkgname=${pkgname:-}"
 
   build:
     needs: check-version
@@ -159,40 +168,57 @@ jobs:
           fi
 
       # ── Reuse skipped package files from latest ────────────────────
+      # 与 reuse job 相同：以 release 资产清单为准（latest 上的 manifest
+      # 可能因 publish 中断而指向已删除的旧资产）。
       - name: Reuse skipped package from latest
         if: steps.result.outputs.skipped == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           package="${{ inputs.package }}"
-          base_url="https://github.com/$GITHUB_REPOSITORY/releases/download/latest"
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          dl="https://github.com/$GITHUB_REPOSITORY/releases/download/latest"
           manifest="$GITHUB_WORKSPACE/manifest-${package}.txt"
           repo_dir="$GITHUB_WORKSPACE/repos/x86_64"
 
-          if [ ! -s "$manifest" ]; then
-            echo "No manifest for skipped package $package in latest"
+          asset_names=$(mktemp)
+          page=1
+          while :; do
+            chunk=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "$api/releases/tags/latest/assets?per_page=100&page=$page")
+            [ "$(jq 'length' <<<"$chunk")" -eq 0 ] && break
+            jq -r '.[].name' <<<"$chunk" >> "$asset_names"
+            page=$((page + 1))
+          done
+
+          candidates=$(awk -v p="$package-" 'index($0,p)==1' "$asset_names" \
+            | grep '\.pkg\.tar\.zst$' | grep -v '\.sig$' | sort -V || true)
+          if [ -z "$candidates" ]; then
+            echo "No package assets for $package in latest"
             exit 1
           fi
+          maxver=$(printf '%s\n' "$candidates" \
+            | sed -E 's/-[^-]+-[^-]+\.pkg\.tar\.zst$//' \
+            | awk -F- '{print $NF}' | sort -V | tail -1)
+          esc=$(sed 's/[][\\/.^$*+?(){}|]/\\&/g' <<<"$maxver")
+          files=$(printf '%s\n' "$candidates" \
+            | grep -E -- "-${esc}-[^-]+-[^-]+\.pkg\.tar\.zst$" || true)
+          [ -n "$files" ] || { echo "No files for version $maxver"; exit 1; }
 
           mkdir -p "$repo_dir"
+          : > "$manifest"
           while IFS= read -r filename; do
-            [ -n "$filename" ] || continue
-            case "$filename" in
-              *.pkg.tar.zst) ;;
-              *) echo "Invalid package filename in manifest: $filename"; exit 1 ;;
-            esac
-            case "$filename" in
-              */*|*..*) echo "Unsafe package filename in manifest: $filename"; exit 1 ;;
-            esac
-
             dest="$repo_dir/$filename"
             partial="${dest}.part"
             echo "  ↓ $filename (resumable)"
             curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
               --continue-at - -H "Authorization: Bearer $GH_TOKEN" \
-              -o "$partial" "$base_url/$filename"
+              -o "$partial" "$dl/$filename"
             mv -f "$partial" "$dest"
-          done < "$manifest"
+            printf '%s\n' "$filename" >> "$manifest"
+          done <<< "$files"
+          rm -f "$asset_names"
 
           if ! compgen -G "$repo_dir/*.pkg.tar.zst" >/dev/null; then
             echo "No package files restored for $package"
@@ -220,10 +246,24 @@ jobs:
 
           printf '%s\n' "${package_files[@]}" > "$manifest_file"
           printf '%s\n' "${{ steps.result.outputs.version }}" > "$version_file"
+          # split 包同族：为每个构建产物名写 version-<name>.txt
+          # （rustrover 的 makepkg 同时产出 rustrover-jre；矩阵按
+          # PackageBase 去重后，同族包靠这里刷新版本元数据）
+          while IFS= read -r filename; do
+            name=$(pacman -Qip "$repo_dir/$filename" 2>/dev/null \
+              | grep '^Name' | awk '{print $3}') || continue
+            [ -n "$name" ] || continue
+            grep -qxF "$name" packages.txt || continue
+            printf '%s\n' "${{ steps.result.outputs.version }}" \
+              > "$GITHUB_WORKSPACE/version-${name}.txt"
+          done < "$manifest_file"
           for filename in "${package_files[@]}"; do
             cp "$repo_dir/$filename" "$artifact_dir/"
           done
-          cp "$version_file" "$manifest_file" "$artifact_dir/"
+          cp "$manifest_file" "$artifact_dir/"
+          for vf in "$GITHUB_WORKSPACE"/version-*.txt; do
+            [ -f "$vf" ] && cp "$vf" "$artifact_dir/"
+          done
           echo "Package artifact contents:"
           ls -lh "$artifact_dir"
 
@@ -243,50 +283,78 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ── 复用旧包（版本未变）───────────────────────────────────
+      # 以 release 资产清单（API 分页）为准，而不是 latest 上的
+      # manifest——后者可能因 publish 中断而过期（指向已删除的旧资产，
+      # 按它下载会 404）。前缀 <pkg>- 匹配本包及 split 同族（rustrover-*
+      # 同时命中 rustrover-jre-*）。版本文件用 check-version 计算的当前
+      # 值重写，顺带把过期元数据自愈。
       - name: Reuse package files from latest
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           package="${{ inputs.package }}"
-          base_url="https://github.com/$GITHUB_REPOSITORY/releases/download/latest"
-          manifest="$GITHUB_WORKSPACE/manifest-${package}.txt"
-          version_file="$GITHUB_WORKSPACE/version-${package}.txt"
+          version="${{ needs.check-version.outputs.version }}"
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          dl="https://github.com/$GITHUB_REPOSITORY/releases/download/latest"
           repo_dir="$GITHUB_WORKSPACE/repos/x86_64"
-
-          # 下载上次发布的 manifest + version 元数据
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            "$base_url/manifest-${package}.txt" -o "$manifest"
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            "$base_url/version-${package}.txt" -o "$version_file"
-          echo "Reusing version: $(cat "$version_file")"
-
-          # 按 manifest 逐个下载包文件（重试 + 断点续传）
+          manifest="$GITHUB_WORKSPACE/manifest-${package}.txt"
           mkdir -p "$repo_dir"
-          while IFS= read -r filename; do
-            [ -n "$filename" ] || continue
-            case "$filename" in
-              *.pkg.tar.zst) ;;
-              *) echo "Invalid package filename in manifest: $filename"; exit 1 ;;
-            esac
-            case "$filename" in
-              */*|*..*) echo "Unsafe package filename in manifest: $filename"; exit 1 ;;
-            esac
 
+          asset_names=$(mktemp)
+          page=1
+          while :; do
+            chunk=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "$api/releases/tags/latest/assets?per_page=100&page=$page")
+            [ "$(jq 'length' <<<"$chunk")" -eq 0 ] && break
+            jq -r '.[].name' <<<"$chunk" >> "$asset_names"
+            page=$((page + 1))
+          done
+
+          candidates=$(awk -v p="$package-" 'index($0,p)==1' "$asset_names" \
+            | grep '\.pkg\.tar\.zst$' | grep -v '\.sig$' | sort -V || true)
+          if [ -z "$candidates" ]; then
+            echo "No package assets for $package in latest"
+            exit 1
+          fi
+          # 中断残留可能同时存在新旧两个版本的文件：只取最新版本
+          maxver=$(printf '%s\n' "$candidates" \
+            | sed -E 's/-[^-]+-[^-]+\.pkg\.tar\.zst$//' \
+            | awk -F- '{print $NF}' | sort -V | tail -1)
+          esc=$(sed 's/[][\\/.^$*+?(){}|]/\\&/g' <<<"$maxver")
+          files=$(printf '%s\n' "$candidates" \
+            | grep -E -- "-${esc}-[^-]+-[^-]+\.pkg\.tar\.zst$" || true)
+          [ -n "$files" ] || { echo "No files for version $maxver"; exit 1; }
+
+          : > "$manifest"
+          while IFS= read -r filename; do
             dest="$repo_dir/$filename"
             partial="${dest}.part"
             echo "  ↓ $filename (resumable)"
             curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
               --continue-at - -H "Authorization: Bearer $GH_TOKEN" \
-              -o "$partial" "$base_url/$filename"
+              -o "$partial" "$dl/$filename"
             mv -f "$partial" "$dest"
-          done < "$manifest"
+            printf '%s\n' "$filename" >> "$manifest"
+          done <<< "$files"
+          rm -f "$asset_names"
 
           if ! compgen -G "$repo_dir/*.pkg.tar.zst" >/dev/null; then
             echo "No package files restored for $package"
             exit 1
           fi
+
+          # version 文件用 check-version 计算的当前版本（而非 latest 上
+          # 可能过期的旧文件）；split 同族（pkgname 输出）一并刷新——
+          # 它们共享同一 pkgver。
+          printf '%s\n' "$version" > "$GITHUB_WORKSPACE/version-${package}.txt"
+          IFS=',' read -ra siblings <<< "${{ needs.check-version.outputs.pkgname }}"
+          for name in "${siblings[@]}"; do
+            [ -n "$name" ] && [ "$name" != "$package" ] || continue
+            grep -qxF "$name" packages.txt || continue
+            printf '%s\n' "$version" > "$GITHUB_WORKSPACE/version-${name}.txt"
+          done
 
       # ── Stage package artifact（与 build job 的产物结构一致）──────
       - name: Stage package artifact
@@ -311,7 +379,12 @@ jobs:
           for filename in "${package_files[@]}"; do
             cp "$repo_dir/$filename" "$artifact_dir/"
           done
-          cp "$version_file" "$manifest_file" "$artifact_dir/"
+          cp "$manifest_file" "$artifact_dir/"
+          # version 文件由上一个步骤写入（check-version 的当前版本 +
+          # split 同族一并刷新），全部纳入 artifact
+          for vf in "$GITHUB_WORKSPACE"/version-*.txt; do
+            [ -f "$vf" ] && cp "$vf" "$artifact_dir/"
+          done
           echo "Reused package artifact contents:"
           ls -lh "$artifact_dir"
 
