@@ -150,8 +150,11 @@ if [ -n "${ASSET_IDS[arch_lib.db.tar.gz]:-}" ]; then
     if curl -fsSL --max-time 30 --retry 3 --retry-all-errors --retry-delay 2 \
         -H "$AUTH" "$DOWNLOAD/arch_lib.db.tar.gz" -o "$db_tmp" 2>/dev/null; then
         while IFS= read -r entry; do
+            # With pipefail enabled, bsdtar can return SIGPIPE when awk exits
+            # after the first FILENAME field.  That status must not abort the
+            # whole publish before the repair/upload phase starts.
             fn=$(bsdtar -xOf "$db_tmp" "$entry" 2>/dev/null \
-                | awk '/^%FILENAME%$/{getline; print; exit}')
+                | awk '/^%FILENAME%$/{getline; print}' || true)
             [ -n "$fn" ] || continue
             if [ -z "${ASSET_IDS[$fn]:-}" ]; then
                 echo "  db references missing asset: $fn"

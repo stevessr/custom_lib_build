@@ -181,12 +181,24 @@ jobs:
           manifest="$GITHUB_WORKSPACE/manifest-${package}.txt"
           repo_dir="$GITHUB_WORKSPACE/repos/x86_64"
 
+          # GitHub's API does not expose assets at /releases/tags/<tag>/assets.
+          # Resolve the release first, then use its documented assets_url.
+          release_json=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$api/releases/tags/latest")
+          assets_url=$(jq -r '.assets_url // empty' <<<"$release_json")
+          if [ -z "$assets_url" ]; then
+            echo "Unable to resolve the latest release assets endpoint"
+            exit 1
+          fi
+
           asset_names=$(mktemp)
+          trap 'rm -f "$asset_names"' EXIT
           page=1
           while :; do
             chunk=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
               -H "Authorization: Bearer $GH_TOKEN" \
-              "$api/releases/tags/latest/assets?per_page=100&page=$page")
+              "$assets_url?per_page=100&page=$page")
             [ "$(jq 'length' <<<"$chunk")" -eq 0 ] && break
             jq -r '.[].name' <<<"$chunk" >> "$asset_names"
             page=$((page + 1))
@@ -301,12 +313,24 @@ jobs:
           manifest="$GITHUB_WORKSPACE/manifest-${package}.txt"
           mkdir -p "$repo_dir"
 
+          # GitHub's API does not expose assets at /releases/tags/<tag>/assets.
+          # Resolve the release first, then use its documented assets_url.
+          release_json=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$api/releases/tags/latest")
+          assets_url=$(jq -r '.assets_url // empty' <<<"$release_json")
+          if [ -z "$assets_url" ]; then
+            echo "Unable to resolve the latest release assets endpoint"
+            exit 1
+          fi
+
           asset_names=$(mktemp)
+          trap 'rm -f "$asset_names"' EXIT
           page=1
           while :; do
             chunk=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
               -H "Authorization: Bearer $GH_TOKEN" \
-              "$api/releases/tags/latest/assets?per_page=100&page=$page")
+              "$assets_url?per_page=100&page=$page")
             [ "$(jq 'length' <<<"$chunk")" -eq 0 ] && break
             jq -r '.[].name' <<<"$chunk" >> "$asset_names"
             page=$((page + 1))
