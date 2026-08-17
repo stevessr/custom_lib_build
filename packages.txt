@@ -98,8 +98,8 @@ kiro-ide
 greetd-dms-greeter-bin
 
 ## noctalia
-noctalia
-noctalia-greeter
+
+
 sddm-theme-noctalia-git
 
 # Minecraft
