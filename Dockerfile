@@ -23,7 +23,12 @@ RUN rm -rf /etc/pacman.d/gnupg && pacman-key --init && pacman-key --populate arc
 # 2. 全量升级 + 安装构建/发布所需依赖（一次性，构建镜像时完成）
 #    - base-devel: gcc / binutils / make / pkgconf 等基础编译工具链
 #    - clang / llvm / lld / cmake / ninja / ccache: 现代 C/C++ 构建链
-#    - rust / cargo / go / nodejs / npm / python: 常见语言工具链
+#    - rustup (替代 rust): cargo/rust/rustfmt 由 rustup 提供（provides）；
+#      用 rustup 而非 rust 是因为部分 AUR 包（如 vite-plus）的 makedepends
+#      直接要求 rustup，而 rust 与 rustup 互相 conflicts，预装 rust 会让
+#      makepkg -s 安装 rustup 时触发 "rustup 与 rust 冲突" 而中断构建。
+#      rustup 同时满足 depends=rust/cargo 与 makedepends=rustup 两种包。
+#    - go / nodejs / npm / python: 常见语言工具链
 #      （AUR 包构建的高频依赖，预装免去每次下载）
 #    - tar / zip / unzip / wget / curl: 源码下载与打包工具
 #    - gnupg / jq / pacman-contrib / sudo: 发布与构建流程依赖
@@ -31,5 +36,5 @@ RUN pacman -Syu --noconfirm && \
     pacman -S --noconfirm --needed \
       base-devel git gnupg jq libglvnd pacman-contrib sudo \
       clang llvm lld cmake ninja ccache \
-      rust cargo go nodejs npm python python-pip \
+      rustup go nodejs npm python python-pip \
       tar zip unzip wget
