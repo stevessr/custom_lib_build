@@ -116,11 +116,14 @@ jobs:
           manifest_file="$GITHUB_WORKSPACE/manifest-${package}.txt"
           rm -f "$version_file" "$manifest_file" "$GITHUB_WORKSPACE/last-versions.txt"
 
+          # NOTE: release download URLs (github.com/.../releases/download/...)
+          # 302-redirect to a pre-signed objects.githubusercontent.com URL.
+          # Forwarding an Authorization header to that redirect target yields
+          # 401, so these downloads MUST NOT carry the token. The repo is
+          # public; for private repos use the API asset endpoint instead.
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            -H "Authorization: Bearer $GH_TOKEN" \
             "$base_url/$(basename "$version_file")" -o "$version_file" 2>/dev/null || true
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            -H "Authorization: Bearer $GH_TOKEN" \
             "$base_url/$(basename "$manifest_file")" -o "$manifest_file" 2>/dev/null || true
 
           if [ -s "$version_file" ] && [ -s "$manifest_file" ]; then
@@ -225,7 +228,7 @@ jobs:
             partial="${dest}.part"
             echo "  ↓ $filename (resumable)"
             curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-              --continue-at - -H "Authorization: Bearer $GH_TOKEN" \
+              --continue-at - \
               -o "$partial" "$dl/$filename"
             mv -f "$partial" "$dest"
             printf '%s\n' "$filename" >> "$manifest"
@@ -357,7 +360,7 @@ jobs:
             partial="${dest}.part"
             echo "  ↓ $filename (resumable)"
             curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-              --continue-at - -H "Authorization: Bearer $GH_TOKEN" \
+              --continue-at - \
               -o "$partial" "$dl/$filename"
             mv -f "$partial" "$dest"
             printf '%s\n' "$filename" >> "$manifest"

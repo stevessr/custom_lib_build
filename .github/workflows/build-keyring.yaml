@@ -62,8 +62,10 @@ jobs:
           cd /tmp/keyring-build
 
           # Prefer the key published on the latest release (deterministic
-          # asset URL, no gh CLI needed in this container)
-          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+          # asset URL, no gh CLI needed in this container). No auth header:
+          # release download URLs redirect to a pre-signed
+          # objects.githubusercontent.com URL that rejects the forwarded token.
+          curl -fsSL \
             "https://github.com/$GITHUB_REPOSITORY/releases/download/latest/arch_lib.pub.asc" \
             -o arch_lib.pub.asc 2>/dev/null || true
 
