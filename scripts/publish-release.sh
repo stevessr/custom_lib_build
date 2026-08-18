@@ -176,9 +176,23 @@ fi
 delete_asset() { # <name>
     local name="$1"
     if [ -n "${ASSET_IDS[$name]:-}" ]; then
-        curl -fsSL -X DELETE -H "$AUTH" "$API/releases/assets/${ASSET_IDS[$name]}" -o /dev/null \
-            && echo "  deleted: $name" || echo "  ⚠ delete failed (ignore): $name"
-        unset 'ASSET_IDS[$name]'
+        # Retry on 5xx/429 (GitHub rate limit / transient errors), like upload does
+        # --retry-all-errors retries on 5xx, 429, and connection failures
+        # Treat 404 as success (asset already gone = idempotent)
+        local http_code
+        http_code=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            -X DELETE -H "$AUTH" "$API/releases/assets/${ASSET_IDS[$name]}" \
+            -o /dev/null -w '%{http_code}')
+        case "$http_code" in
+            204|404)
+                echo "  deleted: $name"
+                unset 'ASSET_IDS[$name]'
+                ;;
+            *)
+                echo "  ✗ delete failed (HTTP $http_code) after retries: $name" >&2
+                return 1
+                ;;
+        esac
     fi
 }
 
