@@ -100,7 +100,8 @@ jobs:
   publish:
     needs: [prepare, build]
     # 单个 build 失败不应阻塞整个仓库发布：prepare 成功后即发布已成功的包。
-    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    # always() 必须显式保留对失败 needs 的执行资格；fail-fast=false 让其余矩阵项继续。
+    if: ${{ always() && !cancelled() && needs.prepare.result == 'success' }}
     uses: ./.github/workflows/publish-repo.yaml
     secrets: inherit
 
