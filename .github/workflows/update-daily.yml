@@ -1,0 +1,117 @@
+# =============================================================================
+# Update custom packages — daily stable GitHub Release checks
+#
+# Each matrix leg updates one independent PKGBUILD and uploads it as an artifact.
+# A single commit job applies all changed recipes together, avoiding competing
+# pushes from matrix jobs.
+# =============================================================================
+
+name: Update custom packages
+concurrency:
+  group: update-custom-packages
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Run before Build AUR Repository (00:00 UTC).
+    - cron: '30 23 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg:
+          - sparkle-bin
+          - cherry-studio-bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update PKGBUILD from upstream release
+        id: bump
+        run: bash scripts/update-custom-pkg.sh "${{ matrix.pkg }}"
+
+      - name: Stage update artifact
+        env:
+          PKG: ${{ matrix.pkg }}
+          CHANGED: ${{ steps.bump.outputs.changed }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p update-artifact
+          cp "custom-pkgs/$PKG/PKGBUILD" update-artifact/PKGBUILD
+          printf '%s\n' "$CHANGED" > update-artifact/changed.txt
+          printf '%s\n' "$VERSION" > update-artifact/version.txt
+
+      - name: Upload update artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-${{ matrix.pkg }}
+          path: update-artifact
+          if-no-files-found: error
+
+  commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: update
+    # Keep usable artifacts when one upstream is temporarily unavailable.
+    if: ${{ !cancelled() }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download matrix artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: update-*
+          path: update-artifacts
+          merge-multiple: false
+
+      - name: Apply updates and commit once
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          changed=0
+          msg_parts=()
+
+          for artifact_dir in update-artifacts/update-*; do
+            [ -d "$artifact_dir" ] || continue
+            pkg="$(basename "$artifact_dir" | sed 's/^update-//')"
+            marker="$artifact_dir/changed.txt"
+            [ -f "$marker" ] || { echo "skip $pkg (missing marker)"; continue; }
+            if [ "$(cat "$marker")" != true ]; then
+              echo "skip $pkg (already up to date)"
+              continue
+            fi
+
+            version="$(cat "$artifact_dir/version.txt")"
+            cp "$artifact_dir/PKGBUILD" "custom-pkgs/$pkg/PKGBUILD"
+            msg_parts+=("$pkg@$version")
+            changed=1
+          done
+
+          if [ "$changed" -eq 0 ]; then
+            echo 'All custom packages are already up to date.'
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add custom-pkgs/
+          if git diff --cached --quiet; then
+            echo 'No recipe diff after applying update artifacts.'
+            exit 0
+          fi
+
+          message='chore(custom-pkgs): auto-update'
+          for part in "${msg_parts[@]}"; do
+            message+=" $part"
+          done
+          git commit -m "$message"
+          git push
+          echo "Pushed: $message"
