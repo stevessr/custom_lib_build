@@ -6,7 +6,7 @@
 
 pkgname=cherry-studio-bin
 _pkgname=cherry-studio
-pkgver=2.0.9
+pkgver=2.0.10
 pkgrel=1
 pkgdesc="🍒 Cherry Studio is a desktop client that supports for multiple LLM providers "
 arch=('x86_64' 'aarch64')
@@ -19,10 +19,10 @@ conflicts=("$_pkgname")
 # Determine architecture-specific values
 case "$CARCH" in
   x86_64)
-    _appimage_arch='x86_64'
+    _appimage_arch='linux-x64'
     ;;
   aarch64)
-    _appimage_arch='arm64'
+    _appimage_arch='linux-arm64'
     ;;
 esac
 
@@ -36,10 +36,10 @@ noextract=("${_pkgname}-${pkgver}.AppImage")
 # Architecture-specific SHA256 checksums
 case "$CARCH" in
   x86_64)
-    _sha256sum='bd01d6324e59e26164e6f7a9f7840dda689cd1c998272ebac44f976022ec0613'
+    _sha256sum='e2afc3bce98763c2e240cc4b46c467a87bc6391b66a133edc4a0966037708f69'
     ;;
   aarch64)
-    _sha256sum='bbbb2dfc7e30250bd2adfdd10f922b7713fcb1a71479283a6846a3dd22d1928d'
+    _sha256sum='3adafd4b3e7ca55e1d0c3dacadc62d0015772fbc93a0d807673f1e0e68192151'
     ;;
 esac
 
@@ -50,7 +50,6 @@ sha256sums=("$_sha256sum"
 
 package() {
   cd "$srcdir"
-
   # Create directories
   install -dm755 "$pkgdir/usr/bin/$pkgname"
   install -dm755 "$pkgdir/usr/share/applications"
