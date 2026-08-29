@@ -32,8 +32,10 @@ case "$PKG" in
     ;;
   cherry-studio-bin)
     REPOSITORY='CherryHQ/cherry-studio'
-    AMD64_ASSET='Cherry-Studio-%s-x86_64.AppImage'
-    ARM64_ASSET='Cherry-Studio-%s-arm64.AppImage'
+    # Cherry Studio 2.0.10+ prefixes Linux AppImage assets with "linux"
+    # and uses "x64" rather than "x86_64" in the upstream filename.
+    AMD64_ASSET='Cherry-Studio-%s-linux-x64.AppImage'
+    ARM64_ASSET='Cherry-Studio-%s-linux-arm64.AppImage'
     ;;
   *)
     fail "unsupported custom package: ${PKG:-<empty>}"
