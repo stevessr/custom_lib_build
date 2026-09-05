@@ -22,7 +22,9 @@ qt6ct-kde
 darkly-bin
 openlogi-bin
 cline-cli
+zcode
 zcode-bin
+zcode-desktop-bin
 
 # imagemagick-full 的 AUR-only 依赖（供其 depends 在本仓解析，见各预构建钩子）
 autotrace-nomagick
