@@ -8,6 +8,9 @@
 # timing
 stayfree-desktop
 
+# nlp
+miniconda3
+
 # small tools
 vicinae-bin
 rtk-bin
