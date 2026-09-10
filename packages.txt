@@ -5,6 +5,9 @@
 # These packages will be built daily via GitHub Actions and
 # served as a pacman-compatible repository.
 
+# yt-dlp
+bgutil-ytdlp-pot-provider
+
 # timing
 stayfree-desktop
 
