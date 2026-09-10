@@ -1,0 +1,113 @@
+# Maintainer: stevessr
+# Upstream: https://github.com/umamoorg/umamo
+#
+# Umamo has no published GitHub Release yet and ProjectInfo.VERSION is currently
+# a development version. Track master as a VCS package instead of pretending
+# that a stable release tarball exists.
+
+pkgname=umamo-git
+_pkgname=umamo
+pkgver=0.2.1.dev.r0.gf9a2dc0
+pkgrel=1
+pkgdesc='Cross-platform 2D puppet modelling editor with Live2D Cubism .cmo3 interop'
+arch=('x86_64' 'aarch64')
+url='https://umamo.org'
+license=('GPL-3.0-only')
+depends=(
+  'java-runtime=21'
+  'libglvnd'
+)
+makedepends=(
+  'git'
+  'jdk21-openjdk'
+)
+optdepends=(
+  'xdg-desktop-portal: native desktop file chooser integration'
+)
+provides=('umamo')
+conflicts=('umamo')
+source=('git+https://github.com/umamoorg/umamo.git#branch=master')
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${srcdir}/${_pkgname}"
+
+  local _version
+  _version="$(sed -n 's/^[[:space:]]*const val VERSION[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+    module/ui/src/commonMain/kotlin/org/umamo/ui/help/ProjectInfo.kt | head -n1)"
+
+  if [[ -z "${_version}" ]]; then
+    _version='0.0.0'
+  fi
+
+  # Arch pkgver must not contain '-'. Keep the upstream version visible and
+  # append the VCS revision so updates on master remain monotonic.
+  _version="${_version//-/.}"
+  printf '%s.r%s.g%s' \
+    "${_version}" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  cd "${srcdir}/${_pkgname}"
+
+  local _target
+  case "${CARCH}" in
+    x86_64) _target='linux-x64' ;;
+    aarch64) _target='linux-arm64' ;;
+    *) return 1 ;;
+  esac
+
+  # Match upstream's release pipeline: build the runnable uber JAR with the
+  # native Skiko/LWJGL artifacts for the current Arch architecture. JDK 21 is
+  # intentional; upstream pins its desktop toolchain/release builds to 21.
+  ./gradlew --no-daemon --stacktrace \
+    -Dorg.gradle.jvmargs='-Xmx2g -Dfile.encoding=UTF-8' \
+    -Pkotlin.daemon.jvmargs=-Xmx2g \
+    -Pumamo.target="${_target}" \
+    -Pumamo.requireTargetIsHost=true \
+    :desktop:packageUberJarForCurrentOS
+}
+
+package() {
+  cd "${srcdir}/${_pkgname}"
+
+  local _target _version _jar
+  case "${CARCH}" in
+    x86_64) _target='linux-x64' ;;
+    aarch64) _target='linux-arm64' ;;
+    *) return 1 ;;
+  esac
+
+  _version="$(sed -n 's/^[[:space:]]*const val VERSION[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+    module/ui/src/commonMain/kotlin/org/umamo/ui/help/ProjectInfo.kt | head -n1)"
+  _jar="app/desktop/build/compose/jars/umamo-${_target}-${_version}.jar"
+
+  install -Dm644 "${_jar}" "${pkgdir}/usr/share/java/umamo/umamo.jar"
+  install -Dm644 app/desktop/icons/umamo.png \
+    "${pkgdir}/usr/share/pixmaps/umamo.png"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+  # The upstream packaged launcher carries -Xmx16g. Preserve that runtime
+  # setting for the system-JRE launcher used by this Arch package.
+  install -dm755 "${pkgdir}/usr/bin"
+  cat > "${pkgdir}/usr/bin/umamo" <<'EOF'
+#!/bin/sh
+exec /usr/bin/java -Xmx16g -jar /usr/share/java/umamo/umamo.jar "$@"
+EOF
+  chmod 755 "${pkgdir}/usr/bin/umamo"
+
+  install -dm755 "${pkgdir}/usr/share/applications"
+  cat > "${pkgdir}/usr/share/applications/umamo.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Umamo
+Comment=Cross-platform 2D puppet modelling editor
+Exec=umamo %F
+Icon=umamo
+Terminal=false
+Categories=Graphics;2DGraphics;
+StartupNotify=true
+EOF
+}
