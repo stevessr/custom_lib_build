@@ -10,6 +10,16 @@ stayfree-desktop
 
 # nlp
 miniconda3
+
+# python-conda and its AUR-only runtime dependency chain. Keep these in the
+# published repository as well as bootstrapping them in pre-build hooks, so a
+# client-side `pacman -S python-conda` can resolve every declared dependency.
+python-archspec
+python-boltons
+python-conda-package-streaming
+python-conda-package-handling
+micromamba
+python-conda-libmamba-solver
 python-conda
 
 # small tools
