@@ -98,6 +98,7 @@ ccline-bin
 cc-switch-bin
 claude-desktop
 pi-coding-agent
+claude-desktop-extra
 
 ## remote
 paseo-desktop-bin
