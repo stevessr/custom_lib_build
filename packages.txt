@@ -132,3 +132,4 @@ glfw-wayland-minecraft-cursorfix
 claude-code
 cscience-bin
 cherry-studio-bin
+umamo-git
