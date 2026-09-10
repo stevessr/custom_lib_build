@@ -1,0 +1,22 @@
+pkgname=python-conda-package-handling
+pkgver=2.6.0
+pkgrel=1
+pkgdesc='Create and extract conda packages of various formats'
+arch=('any')
+url='https://github.com/conda/conda-package-handling'
+license=('BSD-3-Clause')
+depends=(
+  'python'
+  'python-conda-package-streaming>=0.13.0'
+  'python-requests'
+)
+makedepends=('python-installer')
+source=(
+  "conda_package_handling-${pkgver}-py3-none-any.whl::https://github.com/conda/conda-package-handling/releases/download/${pkgver}/conda_package_handling-${pkgver}-py3-none-any.whl"
+)
+sha256sums=('a804c58fcec6f77c750b18455fa9865eb95f63912b149133627bc50636f551df')
+
+package() {
+  python -m installer --destdir="$pkgdir" \
+    "$srcdir/conda_package_handling-${pkgver}-py3-none-any.whl"
+}

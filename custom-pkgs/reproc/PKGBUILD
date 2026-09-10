@@ -1,0 +1,30 @@
+pkgname=reproc
+pkgver=14.2.8
+pkgrel=1
+pkgdesc='Cross-platform library that simplifies working with external CLI applications from C and C++'
+arch=('x86_64')
+url='https://github.com/DaanDeMeyer/reproc'
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+makedepends=('cmake')
+source=("${url}/archive/${pkgver}.tar.gz")
+sha256sums=('27c3b452bfc419a2deda23969aa10c77909c4ff9e71c549eb65d09ae6aa7aa32')
+
+build() {
+  cmake \
+    -S "${pkgname}-${pkgver}" \
+    -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DBUILD_SHARED_LIBS=ON \
+    -DREPROC++=ON \
+    -DREPROC_TEST=OFF
+  cmake --build build --parallel "$(nproc)"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "${srcdir}/${pkgname}-${pkgver}/LICENSE" \
+    "$pkgdir/usr/share/licenses/${pkgname}/LICENSE"
+}

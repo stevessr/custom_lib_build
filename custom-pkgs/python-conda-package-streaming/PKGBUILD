@@ -1,0 +1,21 @@
+pkgname=python-conda-package-streaming
+pkgver=0.13.0
+pkgrel=1
+pkgdesc='An efficient library to read from new and old format .conda and .tar.bz2 conda packages'
+arch=('any')
+url='https://github.com/conda/conda-package-streaming'
+license=('BSD-3-Clause')
+depends=(
+  'python'
+  'python-requests'
+)
+makedepends=('python-installer')
+source=(
+  "conda_package_streaming-${pkgver}-py3-none-any.whl::https://github.com/conda/conda-package-streaming/releases/download/v${pkgver}/conda_package_streaming-${pkgver}-py3-none-any.whl"
+)
+sha256sums=('806ea3f2f7ac272873242e6253d543ac8aaf224e5c76d794e5fee9c63776fb5c')
+
+package() {
+  python -m installer --destdir="$pkgdir" \
+    "$srcdir/conda_package_streaming-${pkgver}-py3-none-any.whl"
+}
