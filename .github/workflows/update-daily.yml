@@ -30,6 +30,8 @@ jobs:
         pkg:
           - sparkle-bin
           - cherry-studio-bin
+          - claude-desktop-http-patch
+          - claude-desktop-full-patch
     steps:
       - uses: actions/checkout@v4
 

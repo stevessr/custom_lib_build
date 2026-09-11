@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Update a custom package whose PKGBUILD tracks a stable GitHub release.
 #
-# Usage: update-custom-pkg.sh <sparkle-bin|cherry-studio-bin>
+# Usage: update-custom-pkg.sh <sparkle-bin|cherry-studio-bin|claude-desktop-http-patch|claude-desktop-full-patch>
 # The script updates the recipe in place and emits `version` and `changed`
 # through GITHUB_OUTPUT when running in GitHub Actions.
 set -euo pipefail
@@ -24,7 +24,50 @@ emit() {
   fi
 }
 
+# ── claude-desktop-*-patch：版本来自 Anthropic 官方 apt 索引 ───────────────
+# 这两个 PKGBUILD 的 pkgver()/校验和在构建时动态获取，这里只把静态的
+# pkgver= 行同步到最新版本，让仓库里的 recipe 与实际构建结果一致。
+update_claude_desktop_patch() {
+  [ -f "$PKGBUILD" ] || fail "missing PKGBUILD: $PKGBUILD"
+  local apt='https://downloads.claude.ai/claude-desktop/apt/stable'
+  local arch latest amd64_ver arm64_ver
+  for arch in amd64 arm64; do
+    latest="$(curl -fsSL --max-time 60 --retry 5 --retry-all-errors --retry-delay 3 \
+        "$apt/dists/stable/main/binary-$arch/Packages" \
+      | awk -v RS= -v FS='\n' '{ for (i=1;i<=NF;i++) if ($i ~ /^Version: /) print substr($i,10) }' \
+      | sort -V | tail -n1)"
+    [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "cannot read latest $arch version from apt index"
+    if [ "$arch" = amd64 ]; then amd64_ver="$latest"; else arm64_ver="$latest"; fi
+  done
+  # 两个架构偶尔不同步；以两个架构都已发布的较低版本为准，避免 aarch64 构建失败
+  local version="$amd64_ver"
+  if [ "$(printf '%s\n%s\n' "$amd64_ver" "$arm64_ver" | sort -V | head -n1)" != "$amd64_ver" ]; then
+    version="$arm64_ver"
+  fi
+
+  local current_version
+  current_version="$(sed -nE "s/^pkgver[[:space:]]*=[[:space:]]*[\"']?([^\"']+)[\"']?[[:space:]]*$/\1/p" "$PKGBUILD" | sed -n '1p')"
+  [ -n "$current_version" ] || fail "could not read pkgver from $PKGBUILD"
+
+  echo "$PKG: current=$current_version latest=$version (amd64=$amd64_ver arm64=$arm64_ver)"
+  emit version "$version"
+  if [ "$current_version" = "$version" ]; then
+    emit changed false
+    echo "$PKG is already up to date"
+    exit 0
+  fi
+
+  sed -i -E "s/^pkgver=.*$/pkgver=$version/; s/^pkgrel=.*$/pkgrel=1/" "$PKGBUILD"
+  bash -n "$PKGBUILD"
+  emit changed true
+  echo "$PKG updated to $version"
+  exit 0
+}
+
 case "$PKG" in
+  claude-desktop-http-patch|claude-desktop-full-patch)
+    update_claude_desktop_patch
+    ;;
   sparkle-bin)
     REPOSITORY='xishang0128/sparkle'
     AMD64_ASSET='sparkle-linux-%s-amd64.deb'
