@@ -1,0 +1,180 @@
+# claude-desktop-http-patch — 官方 Claude Desktop（.deb 重打包）+ 方案 2 补丁
+#
+# 补丁来源: https://github.com/stevessr/claude-app-patch （linux/setup.js patch-asar）
+# 官方源:   https://downloads.claude.ai/claude-desktop/apt/stable （Packages 索引提供版本与 SHA256）
+# 参考:     https://aur.archlinux.org/packages/claude-desktop （depends / Cowork shim 与其保持一致）
+#
+# 方案 2（http）: 去掉 “HTTP 只允许 loopback” 的限制，可以把第三方推理网关指到任意 http:// 端点，
+#                 免登录使用。安装后用自带工具写 3P 配置：
+#                   claude-desktop-3p-config config --url http://host:port --key sk-xxx [--models a,b]
+#                   claude-desktop-3p-config config --from-cli     # 复用 ~/.claude/settings.json
+#
+# pkgver()/校验和在构建时从官方 apt 索引动态获取，无需手动更新。
+# 与 claude-desktop（AUR 原版）以及 claude-desktop-full-patch 互斥，二选一安装。
+
+pkgname=claude-desktop-http-patch
+_scheme=http
+pkgver=1.49585.0
+pkgrel=1
+pkgdesc="Official Claude AI desktop app, patched to allow any http:// third-party inference endpoint (claude-app-patch scheme 2)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/stevessr/claude-app-patch"
+license=('LicenseRef-Proprietary')
+
+# 与 AUR claude-desktop 保持一致的运行时依赖；nodejs 供自带的 3P 配置工具使用
+depends=('alsa-lib'
+         'at-spi2-core'
+         'cairo'
+         'dbus'
+         'expat'
+         'gcc-libs'
+         'glib2'
+         'glibc'
+         'gtk3'
+         'hicolor-icon-theme'
+         'libcap-ng'
+         'libcups'
+         'libdrm'
+         'libnotify'
+         'libseccomp'
+         'libsecret'
+         'libx11'
+         'libxcb'
+         'libxcomposite'
+         'libxdamage'
+         'libxext'
+         'libxfixes'
+         'libxkbcommon'
+         'libxrandr'
+         'libxtst'
+         'mesa'
+         'nodejs'
+         'nspr'
+         'nss'
+         'pango'
+         'socat'
+         'systemd-libs'
+         'util-linux-libs'
+         'virtiofsd'
+         'xdg-desktop-portal'
+         'xdg-utils')
+depends_x86_64=('qemu-system-x86' 'edk2-ovmf')
+depends_aarch64=('qemu-system-aarch64' 'edk2-aarch64')
+makedepends=('nodejs' 'npm' 'curl')
+optdepends=('gnome-keyring: credential storage via Secret Service (GNOME)'
+            'kwallet: credential storage (KDE Plasma)'
+            'libayatana-appindicator: system tray icon'
+            'xdg-desktop-portal-gtk: portal backend for GTK desktops'
+            'xdg-desktop-portal-kde: portal backend for KDE Plasma')
+provides=("claude-desktop=$pkgver")
+conflicts=('claude-desktop' 'claude' 'claude-desktop-bin' 'claude-desktop-full-patch')
+options=('!strip' '!debug')
+source=()
+sha256sums=()
+
+_apt="https://downloads.claude.ai/claude-desktop/apt/stable"
+_patch_repo="https://github.com/stevessr/claude-app-patch"
+_patch_ref="master"
+
+case "$CARCH" in
+  x86_64)  _debarch=amd64 ;;
+  aarch64) _debarch=arm64 ;;
+esac
+
+# 读取官方 apt Packages 索引，输出最新版本的 "Version Filename SHA256"
+_latest() {
+  curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+    "$_apt/dists/stable/main/binary-$_debarch/Packages" \
+    | awk -v RS= -v FS='\n' '{
+        v=""; f=""; s="";
+        for (i=1;i<=NF;i++) {
+          if ($i ~ /^Version: /)  v=substr($i,10);
+          if ($i ~ /^Filename: /) f=substr($i,11);
+          if ($i ~ /^SHA256: /)   s=substr($i,9);
+        }
+        if (v!="" && f!="" && s!="") print v, f, s
+      }' \
+    | sort -V -k1,1 | tail -n1
+}
+
+pkgver() {
+  if [ -s "$srcdir/.version" ]; then
+    cat "$srcdir/.version"
+  else
+    _latest | cut -d' ' -f1
+  fi
+}
+
+prepare() {
+  cd "$srcdir"
+
+  # ── 1. 官方 .deb（版本 / 校验和来自 apt 索引） ─────────────────────
+  local entry ver file sha
+  entry="$(_latest)"
+  [ -n "$entry" ] || { echo "cannot read apt index"; return 1; }
+  read -r ver file sha <<<"$entry"
+  echo "Claude Desktop $ver ($_debarch)"
+  printf '%s\n' "$ver" > .version
+
+  local deb="claude-desktop_${ver}_${_debarch}.deb"
+  if [ ! -f "$SRCDEST/$deb" ] || ! echo "$sha  $SRCDEST/$deb" | sha256sum -c --quiet; then
+    curl -fL --retry 5 --retry-delay 5 --retry-all-errors -o "$SRCDEST/$deb.part" "$_apt/$file"
+    mv -f "$SRCDEST/$deb.part" "$SRCDEST/$deb"
+  fi
+  echo "$sha  $SRCDEST/$deb" | sha256sum -c --quiet
+
+  rm -rf deb
+  mkdir -p deb
+  # .deb 是 ar 归档；只用 data.tar.xz 文件载荷，Debian 的维护脚本不需要
+  bsdtar -xOf "$SRCDEST/$deb" 'data.tar.*' | bsdtar -xf - -C deb
+
+  # ── 2. 补丁工具（claude-app-patch/linux）+ 依赖 ──────────────────
+  rm -rf claude-app-patch
+  curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+    "$_patch_repo/archive/refs/heads/$_patch_ref.tar.gz" \
+    | bsdtar -xf - -s '|^[^/]*/linux|claude-app-patch|' --include '*/linux/*'
+  [ -f claude-app-patch/setup.js ] || { echo "claude-app-patch/linux not found in tarball"; return 1; }
+  ( cd claude-app-patch && npm install --omit=dev --no-audit --no-fund --loglevel=error )
+
+  # ── 3. 打补丁 ───────────────────────────────────────────────────────
+  rm -rf patched
+  node claude-app-patch/setup.js patch-asar --scheme "$_scheme" \
+    --in "$srcdir/deb/usr/lib/claude-desktop/resources/app.asar" \
+    --out "$srcdir/patched/app.asar"
+}
+
+package() {
+  cd "$srcdir"
+  cp -a deb/. "$pkgdir/"
+
+  # 替换为打过补丁的 app.asar（+ .unpacked，原生模块按原结构留在包外）
+  local res="$pkgdir/usr/lib/claude-desktop/resources"
+  rm -rf "$res/app.asar" "$res/app.asar.unpacked"
+  install -Dm644 patched/app.asar "$res/app.asar"
+  cp -a patched/app.asar.unpacked "$res/app.asar.unpacked"
+
+  # ── 以下与 AUR claude-desktop 一致 ──────────────────────────────────
+  chmod 4755 "$pkgdir/usr/lib/claude-desktop/chrome-sandbox"
+  rm -rf "$pkgdir/usr/share/lintian"
+  ln -s ../lib/virtiofsd "$pkgdir/usr/bin/virtiofsd"
+  if [[ $CARCH == x86_64 ]]; then
+    install -d "$pkgdir/usr/share/edk2"
+    ln -s x64/OVMF_CODE.4m.fd "$pkgdir/usr/share/edk2/OVMF_CODE_4M.fd"
+    ln -s x64/OVMF_VARS.4m.fd "$pkgdir/usr/share/edk2/OVMF_VARS_4M.fd"
+  fi
+  install -Dm644 "$pkgdir/usr/share/doc/claude-desktop/copyright" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  # ── 3P 配置工具：claude-desktop-3p-config ──────────────────────────
+  install -d "$pkgdir/usr/lib/claude-app-patch"
+  cp -a claude-app-patch/setup.js claude-app-patch/package.json claude-app-patch/node_modules \
+    "$pkgdir/usr/lib/claude-app-patch/"
+  install -Dm644 claude-app-patch/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -d "$pkgdir/usr/bin"
+  cat > "$pkgdir/usr/bin/claude-desktop-3p-config" <<'EOF'
+#!/bin/sh
+# 写入 Claude Desktop 第三方推理配置（~/.config/Claude-3p/configLibrary 或 --system 写 /etc/claude-desktop）
+exec node /usr/lib/claude-app-patch/setup.js "$@"
+EOF
+  chmod 755 "$pkgdir/usr/bin/claude-desktop-3p-config"
+}

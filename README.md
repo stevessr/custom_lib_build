@@ -62,6 +62,8 @@ AUR 之外的软件可以在 `custom-pkgs/<包名>/PKGBUILD` 提供自定义构�
 custom-pkgs/
 ├── cherry-studio-bin/PKGBUILD  # Cherry Studio 桌面客户端（AppImage，从 CherryHQ/cherry-studio Release 获取）
 ├── claude-code/PKGBUILD        # Claude Code for Node.js（从 CometixSpace/claude-code Release 获取）
+├── claude-desktop-http-patch/  # 官方 Claude Desktop .deb + 允许任意 http:// 推理端点补丁（stevessr/claude-app-patch 方案 2）
+├── claude-desktop-full-patch/  # 官方 Claude Desktop .deb + 功能解锁补丁（stevessr/claude-app-patch 方案 3，实验性）
 └── cscience-bin/PKGBUILD       # Claude Science BYOK（从 Haleclipse/cscience Release 获取，需 bun）
 ```
 
