@@ -1,11 +1,11 @@
-# claude-desktop-http-patch — 官方 Claude Desktop（.deb 重打包）+ 方案 2 补丁
+# claude-desktop-http-patch — 官方 Claude Desktop（.deb 重打包）+ 方案 2 补丁 + 简体中文界面
 #
 # 补丁来源: https://github.com/stevessr/claude-app-patch （linux/setup.js patch-asar）
 # 官方源:   https://downloads.claude.ai/claude-desktop/apt/stable （Packages 索引提供版本与 SHA256）
 # 参考:     https://aur.archlinux.org/packages/claude-desktop （depends / Cowork shim 与其保持一致）
 #
 # 方案 2（http）: 去掉 “HTTP 只允许 loopback” 的限制，可以把第三方推理网关指到任意 http:// 端点，
-#                 免登录使用。安装后用自带工具写 3P 配置：
+#                 免登录使用，并随包安装简体中文界面。安装后用自带工具写 3P 配置：
 #                   claude-desktop-3p-config config --url http://host:port --key sk-xxx [--models a,b]
 #                   claude-desktop-3p-config config --from-cli     # 复用 ~/.claude/settings.json
 #
@@ -14,9 +14,10 @@
 
 pkgname=claude-desktop-http-patch
 _scheme=http
+_lang=zh-CN
 pkgver=1.52386.0
 pkgrel=1
-pkgdesc="Official Claude AI desktop app, patched to allow any http:// third-party inference endpoint (claude-app-patch scheme 2)"
+pkgdesc="Official Claude AI desktop app, patched to allow any http:// third-party inference endpoint with Simplified Chinese UI (claude-app-patch scheme 2)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/stevessr/claude-app-patch"
 license=('LicenseRef-Proprietary')
@@ -136,9 +137,13 @@ prepare() {
   [ -f claude-app-patch/setup.js ] || { echo "claude-app-patch/linux not found in tarball"; return 1; }
   ( cd claude-app-patch && npm install --omit=dev --no-audit --no-fund --loglevel=error )
 
-  # ── 3. 打补丁 ───────────────────────────────────────────────────────
+  # ── 3. 安装简体中文界面资源 ────────────────────────────────────────
+  node claude-app-patch/setup.js zh-resources --lang "$_lang" \
+    --resources "$srcdir/deb/usr/lib/claude-desktop/resources"
+
+  # ── 4. 打补丁（含模型选择器与中文界面 hook） ─────────────────────
   rm -rf patched
-  node claude-app-patch/setup.js patch-asar --scheme "$_scheme" \
+  node claude-app-patch/setup.js patch-asar --scheme "$_scheme" --lang "$_lang" \
     --in "$srcdir/deb/usr/lib/claude-desktop/resources/app.asar" \
     --out "$srcdir/patched/app.asar"
 }
