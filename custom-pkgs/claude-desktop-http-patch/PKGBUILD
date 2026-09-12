@@ -15,7 +15,7 @@
 pkgname=claude-desktop-http-patch
 _scheme=http
 _lang=zh-CN
-pkgver=1.52386.0
+pkgver=1.52386.3
 pkgrel=1
 pkgdesc="Official Claude AI desktop app, patched to allow any http:// third-party inference endpoint with Simplified Chinese UI (claude-app-patch scheme 2)"
 arch=('x86_64' 'aarch64')
