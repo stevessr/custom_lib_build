@@ -71,21 +71,49 @@ custom-pkgs/
 
 ### 3. 安装包
 
-**方式一：作为 pacman 仓库（推荐）**
+**方式一：一键添加 pacman 仓库（推荐）**
 
-编辑 `/etc/pacman.conf`，添加汇总仓库：
+脚本会下载并校验仓库公钥、导入到 pacman 密钥环，并幂等更新
+`/etc/pacman.conf`。脚本只配置仓库，不会自动安装软件包或执行系统升级：
+
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 \
+  https://raw.githubusercontent.com/stevssr/custom_lib_build/master/scripts/install-repo.sh \
+  | bash
+```
+
+如果使用 Cloudflare Worker 或其它 HTTPS 镜像，可通过参数覆盖仓库地址：
+
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 \
+  https://raw.githubusercontent.com/stevssr/custom_lib_build/master/scripts/install-repo.sh \
+  | bash -s -- --repo-url https://你的-worker.example.com
+```
+
+生产环境建议将 `master` 替换为审阅过的不可变 commit；也可以先下载脚本再执行，
+避免直接将管道内容交给 shell：
+
+```bash
+curl -fsSLo /tmp/arch-lib-install-repo.sh \
+  https://raw.githubusercontent.com/stevssr/custom_lib_build/<commit>/scripts/install-repo.sh
+bash /tmp/arch-lib-install-repo.sh
+```
+
+完成后直接安装：
+
+```bash
+sudo pacman -Syu
+sudo pacman -S 包名
+```
+
+**手动配置方式**
+
+也可以编辑 `/etc/pacman.conf`，添加汇总仓库：
 
 ```ini
 [arch_lib]
-SigLevel = Optional TrustAll
-Server = https://你的用户名.github.io/arch_lib/releases/download/latest
-```
-
-然后直接安装：
-
-```bash
-sudo pacman -Sy
-sudo pacman -S 包名
+SigLevel = Optional DatabaseOptional
+Server = https://github.com/stevssr/custom_lib_build/releases/download/latest
 ```
 
 **方式二：单独下载某个包**
@@ -93,7 +121,7 @@ sudo pacman -S 包名
 所有包文件也在 `latest` Release 中：
 
 ```bash
-gh release download latest --repo 你的用户名/arch_lib --pattern '包名-*.pkg.tar.zst'
+gh release download latest --repo stevssr/custom_lib_build --pattern '包名-*.pkg.tar.zst'
 sudo pacman -U 包名-*.pkg.tar.zst
 ```
 
@@ -137,7 +165,7 @@ bash scripts/generate-signing-key.sh [owner/repo]
 
 ```bash
 # 下载并安装 keyring 包（tag = custom-keyring）
-gh release download custom-keyring --repo 你的用户名/arch_lib --pattern '*.pkg.tar.zst'
+gh release download custom-keyring --repo stevssr/custom_lib_build --pattern '*.pkg.tar.zst'
 sudo pacman -U custom-keyring-*.pkg.tar.zst
 
 # 填充 pacman 密钥环（导入公钥 + 本地信任指纹）
@@ -149,14 +177,14 @@ sudo pacman-key --populate arch_lib
 ```ini
 [arch_lib]
 SigLevel = Required DatabaseOptional
-Server = https://你的用户名.github.io/arch_lib/releases/download/latest
+Server = https://github.com/stevssr/custom_lib_build/releases/download/latest
 ```
 
 **方式二：手动导入**
 
 ```bash
 # 下载公钥
-curl -fsSL https://github.com/你的用户名/arch_lib/releases/download/latest/arch_lib.pub.asc | sudo pacman-key --add -
+curl -fsSL https://github.com/stevssr/custom_lib_build/releases/download/latest/arch_lib.pub.asc | sudo pacman-key --add -
 # 本地签名信任
 sudo pacman-key --lsign-key arch-lib@localhost
 
@@ -169,7 +197,7 @@ sudo pacman -U 包名-版本-架构.pkg.tar.zst
 ```ini
 [arch_lib]
 SigLevel = Required DatabaseOptional
-Server = https://你的用户名.github.io/arch_lib/releases/download/latest
+Server = https://github.com/stevssr/custom_lib_build/releases/download/latest
 ```
 
 - `Required`：包必须带有效签名
@@ -197,7 +225,9 @@ arch_lib/
 │   └── manual-build.yaml      # 手动触发单包构建
 ├── scripts/
 │   ├── build-package.sh       # 单包构建脚本（含 -git 跳过逻辑 + custom PKGBUILD）
+│   ├── install-repo.sh        # 用户端一键添加 pacman 仓库
 │   ├── generate-signing-key.sh # 一键生成签名密钥（自动导入 pacman 密钥环）
+│   ├── import-signing-key.sh  # 一键导入仓库签名公钥
 │   ├── gc-releases.sh         # 旧包 Release 清理工具（迁移后不再自动调用）
 │   └── pre-build/             # 包级预构建钩子（可选）
 ├── assets/                    # 项目标识
