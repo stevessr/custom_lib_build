@@ -96,10 +96,9 @@ vite-plus
 ## third party
 ccline-bin
 cc-switch-bin
-claude-desktop
 pi-coding-agent
 claude-desktop-extra
-### 官方 .deb + claude-app-patch 补丁（custom-pkgs/），与 claude-desktop 互斥
+### 官方 .deb + claude-app-patch 补丁（custom-pkgs/），二选一安装
 claude-desktop-http-patch
 claude-desktop-full-patch
 

@@ -256,4 +256,7 @@ printf '配置文件：%s\n' "$PACMAN_CONF"
 printf '备份文件：%s\n' "$backup_file"
 printf '\n现在可以运行：\n'
 printf '  sudo pacman -Syu\n'
-printf '  sudo pacman -S <包名>\n'
+printf '  sudo pacman -S claude-desktop-http-patch  # 方案 2（与 full 二选一）\n'
+printf '  sudo pacman -S claude-desktop-full-patch  # 方案 3（与 http 二选一）\n'
+printf '\nClaude patch 包会通过 /etc/claude-desktop/managed-settings.json 禁用官方自动更新。\n'
+printf '若系统已有官方 .deb 或手工安装，请先卸载/停用，避免它覆盖打过补丁的 app.asar。\n'
