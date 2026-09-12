@@ -5,6 +5,7 @@
 # These packages will be built daily via GitHub Actions and
 # served as a pacman-compatible repository.
 
+
 # yt-dlp
 bgutil-ytdlp-pot-provider
 
@@ -127,9 +128,11 @@ kiro-ide
 greetd-dms-greeter-bin
 
 ## noctalia
-
-
 sddm-theme-noctalia-git
+
+# Singularity Desktop
+## https://github.com/singularityos-lab/singularity-desktop.git
+singularity-desktop-git
 
 # Minecraft
 glfw-wayland-minecraft-cursorfix
@@ -139,3 +142,4 @@ claude-code
 cscience-bin
 cherry-studio-bin
 umamo-git
+
