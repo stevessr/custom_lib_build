@@ -113,6 +113,8 @@ sudo pacman -S claude-desktop-full-patch
 
 两个 patch 包都会安装 `/etc/claude-desktop/managed-settings.json` 并关闭 Claude Desktop 官方自动更新，避免 updater 用未打补丁的新 `app.asar` 覆盖已安装版本。若系统曾通过官方 `.deb`、手工解压或其它来源安装 Claude Desktop，请先卸载/停用该安装，再安装上面的 pacman 包；`pacman` 的 `conflicts` 无法管理一个不属于 pacman 的外部安装。
 
+注意：`claude-desktop-http-patch` 只解除/验证远程 `http://` endpoint 的 URL 限制，不会解除其它功能的 `App unavailable` / `status:"unavailable"` 门控。安装后必须写入合法的 3P 配置；请用 `claude-desktop-3p-config config --url http://主机:端口 --key ...`，并查看 `~/.config/Claude-3p/logs/main.log` 中的 `3P mode active` 与 `inference apiHost`。若要解锁 full 方案的登录功能，请安装 `claude-desktop-full-patch`，两者二选一。
+
 安装后可核对实际版本和补丁构建输入：
 
 ```bash

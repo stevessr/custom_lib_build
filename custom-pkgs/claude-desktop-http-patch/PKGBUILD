@@ -17,7 +17,7 @@ _scheme=http
 _lang=zh-CN
 pkgver=1.52386.3
 # Increment when the pinned patch implementation changes without an upstream app bump.
-pkgrel=2
+pkgrel=3
 pkgdesc="Official Claude AI desktop app, patched to allow any http:// third-party inference endpoint with Simplified Chinese UI (claude-app-patch scheme 2)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/stevessr/claude-app-patch"
@@ -78,7 +78,7 @@ sha256sums=()
 _apt="https://downloads.claude.ai/claude-desktop/apt/stable"
 _patch_repo="https://github.com/stevessr/claude-app-patch"
 # Pin the patch implementation so a rebuild cannot silently change semantics.
-_patch_ref="523b815c9129275dda4d45fa4a56473f716efa0c"
+_patch_ref="5bb8187076edc6dfb9c312f9839a4766866fb362"
 
 case "$CARCH" in
   x86_64)  _debarch=amd64 ;;
@@ -179,8 +179,8 @@ NODE
     return 1
   fi
   cat "$patch_log"
-  grep -Fq 'Allow HTTP endpoints (remove loopback-only restriction)' "$patch_log" || {
-    echo "required HTTP patch did not apply to Claude Desktop $ver"
+  grep -Eq '^PATCH_RESULT http-endpoint state=(patched|already-compatible) hits=[1-9][0-9]*$' "$patch_log" || {
+    echo "required HTTP compatibility check did not pass for Claude Desktop $ver"
     return 1
   }
 
