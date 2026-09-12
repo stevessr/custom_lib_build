@@ -99,11 +99,26 @@ curl -fsSLo /tmp/arch-lib-install-repo.sh \
 bash /tmp/arch-lib-install-repo.sh
 ```
 
-完成后直接安装：
+完成后安装需要的包。Claude Desktop 请明确选择一个补丁方案，不要安装外部官方 `.deb` 后再让它自行更新：
 
 ```bash
 sudo pacman -Syu
-sudo pacman -S 包名
+
+# 方案 2：允许任意 http:// 第三方推理端点（免登录）
+sudo pacman -S claude-desktop-http-patch
+
+# 或方案 3：官方登录模式下解锁功能（与上一项二选一）
+sudo pacman -S claude-desktop-full-patch
+```
+
+两个 patch 包都会安装 `/etc/claude-desktop/managed-settings.json` 并关闭 Claude Desktop 官方自动更新，避免 updater 用未打补丁的新 `app.asar` 覆盖已安装版本。若系统曾通过官方 `.deb`、手工解压或其它来源安装 Claude Desktop，请先卸载/停用该安装，再安装上面的 pacman 包；`pacman` 的 `conflicts` 无法管理一个不属于 pacman 的外部安装。
+
+安装后可核对实际版本和补丁构建输入：
+
+```bash
+pacman -Qi claude-desktop-http-patch  # 或 claude-desktop-full-patch
+cat /etc/claude-desktop/managed-settings.json
+cat /usr/share/doc/claude-desktop-http-patch/BUILD-INFO
 ```
 
 **手动配置方式**

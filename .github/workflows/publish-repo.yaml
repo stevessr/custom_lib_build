@@ -104,6 +104,22 @@ jobs:
             exit 1
           fi
 
+          # Claude patch packages are release-critical. If a newer Desktop
+          # build or patch fails, do not publish the other artifacts while
+          # silently leaving an old Claude package looking current in latest.
+          for required in claude-desktop-http-patch claude-desktop-full-patch; do
+            if ! grep -Eq "^[[:space:]]*$required([[:space:]]|$)" packages.txt; then
+              continue
+            fi
+            shopt -s nullglob
+            files=("package-artifacts/package-$required"/*.pkg.tar.zst)
+            shopt -u nullglob
+            if [ "${#files[@]}" -eq 0 ]; then
+              echo "Missing required Claude patch artifact: $required"
+              exit 1
+            fi
+          done
+
           echo "--- Collected packages ---"
           ls -lh repos/x86_64/
           echo "--- Collected metadata ---"

@@ -20,6 +20,8 @@
 #   skipped=true|false
 #
 set -euo pipefail
+# pacman -Qip fields are parsed below; keep them stable on localized runners.
+export LC_ALL=C
 
 PKG="$1"
 # Output file lives INSIDE the container's workspace ($GITHUB_WORKSPACE),
@@ -268,6 +270,26 @@ done
 if [ "${#built_files[@]}" -eq 0 ]; then
     echo -e "${RED}  ✗ No package files produced${NC}"
     exit 1
+fi
+
+# Custom packages resolve their real version inside makepkg (for example, the
+# Claude Desktop version read from the upstream apt index). Use the package
+# metadata rather than the synthetic custom-build timestamp in release metadata.
+if [ "$IS_CUSTOM" -eq 1 ]; then
+    custom_pkg_version=""
+    for pkgfile in "${built_files[@]}"; do
+        name=$(pacman -Qip "$pkgfile" 2>/dev/null | grep '^Name' | awk '{print $3}') || continue
+        [ "$name" = "$PKG" ] || continue
+        custom_pkg_version=$(pacman -Qip "$pkgfile" 2>/dev/null \
+            | awk -F': *' '$1 ~ /^Version[[:space:]]*$/ { print $2; exit }')
+        break
+    done
+    if [ -z "$custom_pkg_version" ]; then
+        echo -e "${RED}  ✗ Could not read the built version for custom package $PKG${NC}"
+        exit 1
+    fi
+    current_ver="$custom_pkg_version"
+    echo "  Built package version: $current_ver"
 fi
 
 # Copy built packages to repo dir after all size checks pass.

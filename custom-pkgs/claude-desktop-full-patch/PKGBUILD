@@ -20,7 +20,8 @@ pkgname=claude-desktop-full-patch
 _scheme=full
 _lang=zh-CN
 pkgver=1.52386.3
-pkgrel=1
+# Increment when the pinned patch implementation changes without an upstream app bump.
+pkgrel=2
 pkgdesc="Official Claude AI desktop app with feature-unlock patches, DevTools, and Simplified Chinese UI (claude-app-patch scheme 3, experimental)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/stevessr/claude-app-patch"
@@ -74,12 +75,14 @@ optdepends=('gnome-keyring: credential storage via Secret Service (GNOME)'
 provides=("claude-desktop=$pkgver")
 conflicts=('claude-desktop' 'claude' 'claude-desktop-bin' 'claude-desktop-http-patch')
 options=('!strip' '!debug')
+backup=('etc/claude-desktop/managed-settings.json')
 source=()
 sha256sums=()
 
 _apt="https://downloads.claude.ai/claude-desktop/apt/stable"
 _patch_repo="https://github.com/stevessr/claude-app-patch"
-_patch_ref="master"
+# Pin the patch implementation so a rebuild cannot silently change semantics.
+_patch_ref="523b815c9129275dda4d45fa4a56473f716efa0c"
 
 case "$CARCH" in
   x86_64)  _debarch=amd64 ;;
@@ -135,11 +138,35 @@ prepare() {
 
   # ── 2. 补丁工具（claude-app-patch/linux）+ 依赖 ──────────────────
   rm -rf claude-app-patch
+  local patch_url
+  if [[ "$_patch_ref" =~ ^[[:xdigit:]]{40}$ ]]; then
+    patch_url="$_patch_repo/archive/$_patch_ref.tar.gz"
+  else
+    patch_url="$_patch_repo/archive/refs/heads/$_patch_ref.tar.gz"
+  fi
   curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
-    "$_patch_repo/archive/refs/heads/$_patch_ref.tar.gz" \
+    "$patch_url" \
     | bsdtar -xf - -s '|^[^/]*/linux|claude-app-patch|' --include '*/linux/*'
   [ -f claude-app-patch/setup.js ] || { echo "claude-app-patch/linux not found in tarball"; return 1; }
   ( cd claude-app-patch && npm install --omit=dev --no-audit --no-fund --loglevel=error )
+  printf '%s\n' "$_patch_ref" > .patch-ref
+
+  read_asar_version() {
+    ( cd "$srcdir/claude-app-patch" && node - "$1" <<'NODE'
+const asar = require('@electron/asar');
+const pkg = JSON.parse(asar.extractFile(process.argv[2], 'package.json').toString('utf8'));
+process.stdout.write(pkg.version || '');
+NODE
+    )
+  }
+
+  local app_version patched_version patch_log required_patch
+  app_version="$(read_asar_version "$srcdir/deb/usr/lib/claude-desktop/resources/app.asar")"
+  [ -n "$app_version" ] || { echo "cannot read Claude Desktop app version from app.asar"; return 1; }
+  [ "$app_version" = "$ver" ] || {
+    echo "Claude Desktop version mismatch: apt=$ver app.asar=$app_version"
+    return 1
+  }
 
   # ── 3. 安装简体中文界面资源 ────────────────────────────────────────
   node claude-app-patch/setup.js zh-resources --lang "$_lang" \
@@ -147,9 +174,31 @@ prepare() {
 
   # ── 4. 打补丁（含模型选择器与中文界面 hook） ─────────────────────
   rm -rf patched
-  node claude-app-patch/setup.js patch-asar --scheme "$_scheme" --lang "$_lang" \
-    --in "$srcdir/deb/usr/lib/claude-desktop/resources/app.asar" \
-    --out "$srcdir/patched/app.asar"
+  patch_log="$srcdir/patch.log"
+  if ! node claude-app-patch/setup.js patch-asar --scheme "$_scheme" --lang "$_lang" \
+      --in "$srcdir/deb/usr/lib/claude-desktop/resources/app.asar" \
+      --out "$srcdir/patched/app.asar" >"$patch_log" 2>&1; then
+    cat "$patch_log"
+    echo "Claude Desktop patch failed for version $ver"
+    return 1
+  fi
+  cat "$patch_log"
+  for required_patch in \
+      'Unlock dev-only features (bypass isPackaged gate)' \
+      'Inject ~/.claude/settings.json env into Claude Code session env' \
+      'Drop --model CLI arg (let CLI settings decide)' \
+      'Bootstrap capability injection + DevTools (F12 / Ctrl+Shift+I)'; do
+    grep -Fq "$required_patch" "$patch_log" || {
+      echo "required full patch did not apply: $required_patch"
+      return 1
+    }
+  done
+
+  patched_version="$(read_asar_version "$srcdir/patched/app.asar")"
+  [ "$patched_version" = "$ver" ] || {
+    echo "patched app.asar version mismatch: apt=$ver patched=$patched_version"
+    return 1
+  }
 }
 
 package() {
@@ -179,6 +228,23 @@ package() {
   cp -a claude-app-patch/setup.js claude-app-patch/package.json claude-app-patch/node_modules \
     "$pkgdir/usr/lib/claude-app-patch/"
   install -Dm644 claude-app-patch/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+  # Disable the upstream updater so it cannot replace the patched app.asar.
+  install -d "$pkgdir/etc/claude-desktop"
+  cat > "$pkgdir/etc/claude-desktop/managed-settings.json" <<'EOF'
+{
+  "disableAutoUpdates": true
+}
+EOF
+  chmod 644 "$pkgdir/etc/claude-desktop/managed-settings.json"
+
+  cat > "$pkgdir/usr/share/doc/$pkgname/BUILD-INFO" <<EOF
+Claude Desktop version: $(cat .version)
+Patch scheme: $_scheme
+claude-app-patch ref: $(cat .patch-ref)
+EOF
+  chmod 644 "$pkgdir/usr/share/doc/$pkgname/BUILD-INFO"
+
   install -d "$pkgdir/usr/bin"
   cat > "$pkgdir/usr/bin/claude-desktop-3p-config" <<'EOF'
 #!/bin/sh
