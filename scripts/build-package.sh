@@ -211,15 +211,135 @@ printf '\n# arch_lib package-size policy\nPKGEXT=.pkg.tar.zst\nCOMPRESSZST=(zstd
     "$PACKAGE_ZSTD_LEVEL" >> "$MAKEPKG_CONFIG"
 
 # ── 注册本仓 pacman 源：让包的 depends/makedepends 里的本仓包也能被
-# makepkg -s 解析（例如 autotrace-nomagick→pstoedit-nomagick）。幂等。
-# 容器是一次性构建环境，SigLevel=Never 只为解析用，不影响终端用户。
-if ! grep -q '^\[arch_lib\]$' /etc/pacman.conf 2>/dev/null; then
+# makepkg -s 解析（例如 autotrace-nomagick→pstoedit-nomagick）。
+#
+# GitHub Release 的下载端点偶发短暂 404/重定向异常。旧逻辑把 pacman -Sy
+# 的失败吞掉后仍保留 [arch_lib]，会让后续 makepkg -s 连官方仓库依赖都
+# 因“arch_lib database does not exist”而失败。现在重试同步；若仍失败，
+# 删除本次临时加入的仓库块并继续，让不依赖 arch_lib 的包仍可正常构建。
+ARCH_LIB_BEGIN='# BEGIN arch_lib CI'
+ARCH_LIB_END='# END arch_lib CI'
+arch_lib_added=0
+if ! grep -q '^\[arch_lib\]# --skippgpcheck：容器连不上 keyserver，且 sha256 已校验通过（PGP
+# 签名校验在此环境无意义，但对部分 AUR 包会直接中断构建）。
+if ! makepkg --config "$MAKEPKG_CONFIG" -s --noconfirm --needed --skippgpcheck 2>&1 | sed 's/^/  /'; then
+    echo -e "${RED}  ✗ Build failed for $PKG${NC}"
+    # ── Diagnostics: toolchain + failing configure logs ──────────────
+    # Printed so CI failures can be debugged from the job log alone
+    # (config.log is not otherwise uploaded). Conftest compile/link/run
+    # evidence lines tell link errors vs. runtime failures (e.g. $? = 139).
+    echo -e "${YELLOW}  ── build diagnostics ──${NC}"
+    echo "  gcc: $(gcc --version 2>/dev/null | head -1)"
+    echo "  ld:  $(ld --version 2>/dev/null | head -1)"
+    echo "  cwd: $(pwd)"
+    echo "  disk: $(df -h "$BUILD_DIR" 2>/dev/null | tail -1)"
+    shopt -s nullglob
+    for clog in "$PKG_DIR"/src/*/config.log "$PKG_DIR"/src/config.log; do
+        [ -f "$clog" ] || continue
+        echo "  >>> $clog"
+        grep -nE 'conftest|error:|Segmentation|cannot ' "$clog" | tail -25
+        echo "  ── tail of config.log ──"
+        tail -25 "$clog"
+    done
+    shopt -u nullglob
+    exit 1
+fi
+
+# Validate every package before copying anything. A pacman package is an
+# atomic archive: blindly splitting the .pkg.tar.zst would make it unusable
+# by pacman and by repo-add. Oversized packages need a PKGBUILD-level split.
+shopt -s nullglob
+built_files=()
+for pkgfile in "$PKG_DIR"/*.pkg.tar.zst; do
+    name=$(pacman -Qip "$pkgfile" 2>/dev/null | grep '^Name' | awk '{print $3}') || continue
+    [ -n "$name" ] || continue
+
+    artifact_size=$(stat -c '%s' "$pkgfile")
+    if (( artifact_size > MAX_RELEASE_ASSET_BYTES )); then
+        size_mib=$(( (artifact_size + 1048575) / 1048576 ))
+        limit_mib=$(( (MAX_RELEASE_ASSET_BYTES + 1048575) / 1048576 ))
+        echo -e "${RED}  ✗ $name is ${size_mib} MiB; GitHub Release limit is ${limit_mib} MiB${NC}"
+        echo "  Split the PKGBUILD into pacman split packages instead of splitting this archive."
+        exit 1
+    fi
+    built_files+=("$pkgfile")
+done
+
+if [ "${#built_files[@]}" -eq 0 ]; then
+    echo -e "${RED}  ✗ No package files produced${NC}"
+    exit 1
+fi
+
+# Custom packages resolve their real version inside makepkg (for example, the
+# Claude Desktop version read from the upstream apt index). Use the package
+# metadata rather than the synthetic custom-build timestamp in release metadata.
+if [ "$IS_CUSTOM" -eq 1 ]; then
+    custom_pkg_version=""
+    for pkgfile in "${built_files[@]}"; do
+        name=$(pacman -Qip "$pkgfile" 2>/dev/null | grep '^Name' | awk '{print $3}') || continue
+        [ "$name" = "$PKG" ] || continue
+        custom_pkg_version=$(pacman -Qip "$pkgfile" 2>/dev/null \
+            | awk -F': *' '$1 ~ /^Version[[:space:]]*$/ { print $2; exit }')
+        break
+    done
+    if [ -z "$custom_pkg_version" ]; then
+        echo -e "${RED}  ✗ Could not read the built version for custom package $PKG${NC}"
+        exit 1
+    fi
+    current_ver="$custom_pkg_version"
+    echo "  Built package version: $current_ver"
+fi
+
+# Copy built packages to repo dir after all size checks pass.
+for pkgfile in "${built_files[@]}"; do
+    name=$(pacman -Qip "$pkgfile" 2>/dev/null | grep '^Name' | awk '{print $3}') || continue
+    [ -n "$name" ] || continue
+    # Remove any old version of the same package
+    rm -f "$REPO_DIR/${name}"-*.pkg.tar.* 2>/dev/null || true
+    # Sanitize filename: epoch colons (e.g. kiro-ide-2:1.0.242) are rejected
+    # by GitHub artifact upload. Replace ':' with '_' everywhere.
+    destname=$(basename "$pkgfile" | tr ':' '_')
+    cp "$pkgfile" "$REPO_DIR/$destname"
+    artifact_size=$(stat -c '%s' "$pkgfile")
+    size_mib=$(( (artifact_size + 1048575) / 1048576 ))
+    echo -e "${GREEN}  ✓ Built: $destname (${size_mib} MiB)${NC}"
+done
+
+echo "version=$current_ver" > "$PKG_OUTPUT"
+echo "skipped=false" >> "$PKG_OUTPUT"
+
+echo -e "${GREEN}  ✓ Done: $PKG${NC}"
+ /etc/pacman.conf 2>/dev/null; then
     {
-        printf '\n[arch_lib]\n'
+        printf '\n%s\n' "$ARCH_LIB_BEGIN"
+        printf '[arch_lib]\n'
         printf 'SigLevel = Never\n'
         printf 'Server = https://github.com/%s/releases/download/latest\n' "${GITHUB_REPOSITORY:-stevessr/custom_lib_build}"
-    } | sudo -n tee -a /etc/pacman.conf >/dev/null 2>&1 || true
-    sudo -n pacman -Sy --noconfirm >/dev/null 2>&1 || true
+        printf '%s\n' "$ARCH_LIB_END"
+    } | sudo -n tee -a /etc/pacman.conf >/dev/null
+    arch_lib_added=1
+
+    sync_log="${TMPDIR:-/tmp}/arch-lib-pacman-sync.log"
+    sync_ok=0
+    for attempt in 1 2 3; do
+        if sudo -n pacman -Sy --noconfirm >"$sync_log" 2>&1; then
+            sync_ok=1
+            break
+        fi
+        echo "  (arch_lib database sync attempt $attempt failed; retrying)" >&2
+        sleep 3
+    done
+
+    if [ "$sync_ok" -ne 1 ]; then
+        echo -e "${YELLOW}  ⚠ arch_lib unavailable; building with official repos/AUR fallbacks${NC}"
+        tail -20 "$sync_log" | sed 's/^/  /' >&2 || true
+        sudo -n sed -i \
+            "/^# BEGIN arch_lib CI$/,/^# END arch_lib CI$/d" \
+            /etc/pacman.conf
+        arch_lib_added=0
+        # Refresh official repositories after removing the broken source.
+        sudo -n pacman -Sy --noconfirm >/dev/null 2>&1 || true
+    fi
 fi
 
 # --skippgpcheck：容器连不上 keyserver，且 sha256 已校验通过（PGP
