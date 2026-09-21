@@ -24,7 +24,7 @@ sha256sums=()
 _latest_bongocat_version() {
   git ls-remote --tags https://github.com/vladelaina/BongoCat.git \
     | awk '{print $2}' \
-    | grep -oP 'v\\K[0-9]+\\.[0-9]+\\.[0-9]+$' \
+    | sed -nE 's#^refs/tags/v([0-9]+\.[0-9]+\.[0-9]+)$#\1#p' \
     | sort -V | tail -1
 }
 
