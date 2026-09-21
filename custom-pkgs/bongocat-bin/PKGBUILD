@@ -4,8 +4,8 @@
 # 下载: https://github.com/vladelaina/BongoCat/releases/download/v$pkgver/BongoCat-$pkgver-linux-x64.tar.gz
 #
 # tarball 结构（顶层目录 BongoCat-$pkgver-linux-x64/）:
-#   ├── BongoCat    # ELF 64-bit 动态链接可执行文件（stripped，libGLX/libXi/libX11/libcurl）
-#   └── assets/     # Live2D 模型（standard cat.model3.json + 按键图 + 背景）
+#   ├── BongoCat    # ELF 64-bit 动态链接可执行文件
+#   └── assets/     # Live2D 模型与运行时资源
 
 pkgname=bongocat-bin
 _pkgname=BongoCat
@@ -21,30 +21,59 @@ options=('!strip')
 source=()
 sha256sums=()
 
-# 动态获取最新版本号（GitHub 标签，如 v1.11.0）
-pkgver() {
+_latest_bongocat_version() {
   git ls-remote --tags https://github.com/vladelaina/BongoCat.git \
     | awk '{print $2}' \
-    | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+$' \
+    | grep -oP 'v\\K[0-9]+\\.[0-9]+\\.[0-9]+$' \
     | sort -V | tail -1
 }
 
+# makepkg 的执行顺序是 prepare() -> pkgver() -> package()。
+# 因此不能在 prepare() 里直接使用静态 pkgver 下载、再让 pkgver()
+# 更新到新版本，否则 package() 会寻找不存在的新版本目录。
 prepare() {
   cd "$srcdir"
-  local url="https://github.com/vladelaina/BongoCat/releases/download/v${pkgver}/BongoCat-${pkgver}-linux-x64.tar.gz"
-  echo "Downloading: $url"
-  curl -fsSL --retry 3 --retry-delay 2 -o bongocat.tar.gz "$url"
-  tar -xzf bongocat.tar.gz   # 解出 BongoCat-$pkgver-linux-x64/
-  rm -f bongocat.tar.gz
+
+  local latest archive base_url
+  latest="$(_latest_bongocat_version)"
+  if [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Unable to determine latest BongoCat version" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$latest" > .bongocat-version
+  archive="BongoCat-${latest}-linux-x64.tar.gz"
+  base_url="https://github.com/vladelaina/BongoCat/releases/download/v${latest}"
+
+  echo "Downloading: ${base_url}/${archive}"
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+    -o "$archive" "${base_url}/${archive}"
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+    -o "${archive}.sha256" "${base_url}/${archive}.sha256"
+
+  # 上游 release workflow 同时发布 .sha256，显式校验后再解包。
+  sha256sum -c "${archive}.sha256"
+  tar -xzf "$archive"
+  rm -f "$archive" "${archive}.sha256"
+}
+
+pkgver() {
+  if [ -s "$srcdir/.bongocat-version" ]; then
+    cat "$srcdir/.bongocat-version"
+  else
+    _latest_bongocat_version
+  fi
 }
 
 package() {
-  cd "$srcdir/BongoCat-${pkgver}-linux-x64"
+  local resolved_ver
+  resolved_ver="$(cat "$srcdir/.bongocat-version")"
+  cd "$srcdir/BongoCat-${resolved_ver}-linux-x64"
 
   install -d "$pkgdir/usr/lib/bongocat-bin"
   cp -a BongoCat assets "$pkgdir/usr/lib/bongocat-bin/"
 
-  # assets/ 相对路径按运行时约定解析（README: 与可执行文件同目录）
+  # assets/ 相对路径按运行时约定解析（与可执行文件同目录）。
   install -d "$pkgdir/usr/bin"
   cat > "$pkgdir/usr/bin/bongocat" <<'WRAPPER'
 #!/bin/sh
