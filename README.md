@@ -64,6 +64,7 @@ custom-pkgs/
 ├── claude-code/PKGBUILD        # Claude Code for Node.js（从 CometixSpace/claude-code Release 获取）
 ├── claude-desktop-http-patch/  # 官方 Claude Desktop .deb + 允许任意 http:// 推理端点补丁（stevessr/claude-app-patch 方案 2）
 ├── claude-desktop-full-patch/  # 官方 Claude Desktop .deb + 功能解锁补丁（stevessr/claude-app-patch 方案 3，实验性）
+├── bongocat-bin/PKGBUILD       # BongoCat 桌宠（从 vladelaina/BongoCat Release 获取官方预构建 tar.gz）
 └── cscience-bin/PKGBUILD       # Claude Science BYOK（从 Haleclipse/cscience Release 获取，需 bun）
 ```
 
@@ -252,6 +253,7 @@ arch_lib/
 ├── custom-pkgs/              # 自定义 PKGBUILD（优先于 AUR）
 │   ├── cherry-studio-bin/PKGBUILD  # 从 CherryHQ/cherry-studio Release 下载 AppImage
 │   ├── claude-code/PKGBUILD  # 从 CometixSpace/claude-code Release 下载
+│   ├── bongocat-bin/PKGBUILD # 从 vladelaina/BongoCat Release 下载（官方预构建）
 │   └── cscience-bin/PKGBUILD # 从 Haleclipse/cscience Release 下载（原生 Bun）
 ├── packages.txt              # 要构建的包列表（AUR 或 custom-pkgs）
 ├── arch_lib.pub.asc          # 签名公钥占位

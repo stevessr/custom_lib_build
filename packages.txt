@@ -46,6 +46,9 @@ zcode
 zcode-bin
 zcode-desktop-bin
 
+# 桌宠
+bongocat-bin
+
 # imagemagick-full 的 AUR-only 依赖（供其 depends 在本仓解析，见各预构建钩子）
 autotrace-nomagick
 magickcache-git
@@ -127,9 +130,8 @@ kiro-ide
 greetd-dms-greeter-bin
 
 ## noctalia
-
-
 sddm-theme-noctalia-git
+umbriel
 
 # Minecraft
 glfw-wayland-minecraft-cursorfix
