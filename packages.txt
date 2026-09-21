@@ -76,7 +76,7 @@ wps-office-fonts
 # Tencent
 linuxqq
 wechat-bin
-
+wechat
 
 # Coding Language
 flutter-bin
