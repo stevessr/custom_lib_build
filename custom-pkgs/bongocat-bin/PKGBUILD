@@ -1,0 +1,54 @@
+# 由 arch_lib 维护: vladelaina/BongoCat 官方预构建 tar.gz（C×SDL3×OpenGL 原生运行时）
+# AUR 上无对应包（aur bongo-cat 是 ayangweb/BongoCat Tauri fork），故走 custom-pkgs
+# 来源: https://github.com/vladelaina/BongoCat
+# 下载: https://github.com/vladelaina/BongoCat/releases/download/v$pkgver/BongoCat-$pkgver-linux-x64.tar.gz
+#
+# tarball 结构（顶层目录 BongoCat-$pkgver-linux-x64/）:
+#   ├── BongoCat    # ELF 64-bit 动态链接可执行文件（stripped，libGLX/libXi/libX11/libcurl）
+#   └── assets/     # Live2D 模型（standard cat.model3.json + 按键图 + 背景）
+
+pkgname=bongocat-bin
+_pkgname=BongoCat
+pkgver=1.11.0
+pkgrel=1
+pkgdesc="跨平台互动桌宠 BongoCat（C × SDL3 × OpenGL 原生版，官方预构建）"
+arch=('x86_64')
+url="https://github.com/vladelaina/BongoCat"
+license=('LicenseRef-BongoCat' 'LicenseRef-MIT')
+depends=('libglvnd' 'curl' 'libx11' 'libxi' 'libxfixes')
+conflicts=()
+options=('!strip')
+source=()
+sha256sums=()
+
+# 动态获取最新版本号（GitHub 标签，如 v1.11.0）
+pkgver() {
+  git ls-remote --tags https://github.com/vladelaina/BongoCat.git \
+    | awk '{print $2}' \
+    | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V | tail -1
+}
+
+prepare() {
+  cd "$srcdir"
+  local url="https://github.com/vladelaina/BongoCat/releases/download/v${pkgver}/BongoCat-${pkgver}-linux-x64.tar.gz"
+  echo "Downloading: $url"
+  curl -fsSL --retry 3 --retry-delay 2 -o bongocat.tar.gz "$url"
+  tar -xzf bongocat.tar.gz   # 解出 BongoCat-$pkgver-linux-x64/
+  rm -f bongocat.tar.gz
+}
+
+package() {
+  cd "$srcdir/BongoCat-${pkgver}-linux-x64"
+
+  install -d "$pkgdir/usr/lib/bongocat-bin"
+  cp -a BongoCat assets "$pkgdir/usr/lib/bongocat-bin/"
+
+  # assets/ 相对路径按运行时约定解析（README: 与可执行文件同目录）
+  install -d "$pkgdir/usr/bin"
+  cat > "$pkgdir/usr/bin/bongocat" <<'WRAPPER'
+#!/bin/sh
+exec /usr/lib/bongocat-bin/BongoCat "$@"
+WRAPPER
+  chmod +x "$pkgdir/usr/bin/bongocat"
+}
