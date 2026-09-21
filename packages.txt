@@ -76,7 +76,8 @@ wps-office-fonts
 # Tencent
 linuxqq
 wechat-bin
-# AUR wechat 的硬依赖；同时发布到 arch_lib，首次构建由 pre-build hook 自举。
+# AUR wechat 的硬依赖链；同时发布到 arch_lib，首次构建由 pre-build hook 自举。
+portable-packer
 portable
 wechat
 
