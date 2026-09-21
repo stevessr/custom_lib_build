@@ -1,11 +1,10 @@
 # 由 arch_lib 维护: vladelaina/BongoCat 官方预构建 tar.gz（C×SDL3×OpenGL 原生运行时）
 # AUR 上无对应包（aur bongo-cat 是 ayangweb/BongoCat Tauri fork），故走 custom-pkgs
 # 来源: https://github.com/vladelaina/BongoCat
-# 下载: https://github.com/vladelaina/BongoCat/releases/download/v$pkgver/BongoCat-$pkgver-linux-x64.tar.gz
 #
-# tarball 结构（顶层目录 BongoCat-$pkgver-linux-x64/）:
-#   ├── BongoCat    # ELF 64-bit 动态链接可执行文件
-#   └── assets/     # Live2D 模型与运行时资源
+# 不直接拼 releases/download URL：GitHub Release 资产刚发布时 CDN/重定向
+# 偶发返回 404。这里通过 Releases API 定位 latest 中实际存在的
+# linux-x64 tar.gz，再从 asset API 下载，并使用 API 返回的 sha256 digest 校验。
 
 pkgname=bongocat-bin
 _pkgname=BongoCat
@@ -16,53 +15,67 @@ arch=('x86_64')
 url="https://github.com/vladelaina/BongoCat"
 license=('LicenseRef-BongoCat' 'LicenseRef-MIT')
 depends=('libglvnd' 'curl' 'libx11' 'libxi' 'libxfixes')
+makedepends=('jq')
 conflicts=()
 options=('!strip')
 source=()
 sha256sums=()
 
-_latest_bongocat_version() {
-  git ls-remote --tags https://github.com/vladelaina/BongoCat.git \
-    | awk '{print $2}' \
-    | sed -nE 's#^refs/tags/v([0-9]+\.[0-9]+\.[0-9]+)$#\1#p' \
-    | sort -V | tail -1
-}
-
-# makepkg 的执行顺序是 prepare() -> pkgver() -> package()。
-# 因此不能在 prepare() 里直接使用静态 pkgver 下载、再让 pkgver()
-# 更新到新版本，否则 package() 会寻找不存在的新版本目录。
 prepare() {
   cd "$srcdir"
 
-  local latest archive base_url
-  latest="$(_latest_bongocat_version)"
+  local release_json latest asset_name asset_api digest
+  release_json="$(mktemp)"
+  trap 'rm -f "$release_json"' RETURN
+
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2026-03-10' \
+    'https://api.github.com/repos/vladelaina/BongoCat/releases/latest' \
+    -o "$release_json"
+
+  latest="$(jq -r '.tag_name // empty | sub("^v"; "")' "$release_json")"
   if [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Unable to determine latest BongoCat version" >&2
+    echo "Unable to determine latest BongoCat release version" >&2
+    return 1
+  fi
+
+  asset_name="BongoCat-${latest}-linux-x64.tar.gz"
+  asset_api="$(jq -r --arg n "$asset_name" \
+    '.assets[]? | select(.name == $n and .state == "uploaded") | .url' \
+    "$release_json" | head -n1)"
+  digest="$(jq -r --arg n "$asset_name" \
+    '.assets[]? | select(.name == $n and .state == "uploaded") | .digest // empty' \
+    "$release_json" | head -n1)"
+
+  if [ -z "$asset_api" ]; then
+    echo "Latest release v$latest has no uploaded $asset_name asset" >&2
+    return 1
+  fi
+  if [[ ! "$digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]]; then
+    echo "Latest release v$latest has no usable SHA-256 digest for $asset_name" >&2
     return 1
   fi
 
   printf '%s\n' "$latest" > .bongocat-version
-  archive="BongoCat-${latest}-linux-x64.tar.gz"
-  base_url="https://github.com/vladelaina/BongoCat/releases/download/v${latest}"
+  echo "Downloading GitHub release asset: $asset_name"
 
-  echo "Downloading: ${base_url}/${archive}"
-  curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-    -o "$archive" "${base_url}/${archive}"
-  curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-    -o "${archive}.sha256" "${base_url}/${archive}.sha256"
+  # GitHub documents application/octet-stream on the asset API as the binary
+  # download path. It may return either 200 (stream) or 302; -L handles both.
+  curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
+    -H 'Accept: application/octet-stream' \
+    -H 'X-GitHub-Api-Version: 2026-03-10' \
+    "$asset_api" -o "$asset_name"
 
-  # 上游 release workflow 同时发布 .sha256，显式校验后再解包。
-  sha256sum -c "${archive}.sha256"
-  tar -xzf "$archive"
-  rm -f "$archive" "${archive}.sha256"
+  printf '%s  %s\n' "${digest#sha256:}" "$asset_name" | sha256sum -c -
+  tar -xzf "$asset_name"
+  rm -f "$asset_name"
 }
 
+# makepkg 顺序为 prepare() -> pkgver() -> package()，所以 pkgver 必须读取
+# prepare 已经实际下载到的 release 版本，不能再次独立查询最新 tag。
 pkgver() {
-  if [ -s "$srcdir/.bongocat-version" ]; then
-    cat "$srcdir/.bongocat-version"
-  else
-    _latest_bongocat_version
-  fi
+  cat "$srcdir/.bongocat-version"
 }
 
 package() {
