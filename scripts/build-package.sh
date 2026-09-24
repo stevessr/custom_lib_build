@@ -211,15 +211,39 @@ printf '\n# arch_lib package-size policy\nPKGEXT=.pkg.tar.zst\nCOMPRESSZST=(zstd
     "$PACKAGE_ZSTD_LEVEL" >> "$MAKEPKG_CONFIG"
 
 # ── 注册本仓 pacman 源：让包的 depends/makedepends 里的本仓包也能被
-# makepkg -s 解析（例如 autotrace-nomagick→pstoedit-nomagick）。幂等。
+# makepkg -s 解析（例如 autotrace-nomagick→pstoedit-nomagick）。
 # 容器是一次性构建环境，SigLevel=Never 只为解析用，不影响终端用户。
+#
+# GitHub Release 下载端点偶发短暂失败。只有在本仓数据库能同步成功时
+# 才保留 [arch_lib]；否则恢复修改前的 pacman.conf，让官方仓库/AUR
+# 路径继续工作，避免一个坏的自定义仓库阻断所有 makepkg -s。
 if ! grep -q '^\[arch_lib\]$' /etc/pacman.conf 2>/dev/null; then
+    pacman_conf_backup="${TMPDIR:-/tmp}/pacman.conf.before-arch-lib"
+    sudo -n cp /etc/pacman.conf "$pacman_conf_backup"
+
     {
         printf '\n[arch_lib]\n'
         printf 'SigLevel = Never\n'
         printf 'Server = https://github.com/%s/releases/download/latest\n' "${GITHUB_REPOSITORY:-stevessr/custom_lib_build}"
-    } | sudo -n tee -a /etc/pacman.conf >/dev/null 2>&1 || true
-    sudo -n pacman -Sy --noconfirm >/dev/null 2>&1 || true
+    } | sudo -n tee -a /etc/pacman.conf >/dev/null
+
+    sync_log="${TMPDIR:-/tmp}/arch-lib-pacman-sync.log"
+    sync_ok=0
+    for attempt in 1 2 3; do
+        if sudo -n pacman -Sy --noconfirm >"$sync_log" 2>&1; then
+            sync_ok=1
+            break
+        fi
+        echo "  (arch_lib database sync attempt $attempt failed; retrying)" >&2
+        sleep 3
+    done
+
+    if [ "$sync_ok" -ne 1 ]; then
+        echo -e "${YELLOW}  ⚠ arch_lib unavailable; falling back to official repos/AUR${NC}"
+        tail -20 "$sync_log" | sed 's/^/  /' >&2 || true
+        sudo -n cp "$pacman_conf_backup" /etc/pacman.conf
+        sudo -n pacman -Sy --noconfirm >/dev/null 2>&1 || true
+    fi
 fi
 
 # --skippgpcheck：容器连不上 keyserver，且 sha256 已校验通过（PGP

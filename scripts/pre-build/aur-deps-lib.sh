@@ -10,22 +10,45 @@ REPO_URL="${REPO_URL:-https://github.com/${GITHUB_REPOSITORY}/releases/download/
 mkdir -p "$AUR_DEPS_DIR"
 
 ensure_arch_lib_repo() {
-    if ! grep -q "^\[${REPO_NAME}\]$" /etc/pacman.conf 2>/dev/null; then
+    local begin="# BEGIN ${REPO_NAME} bootstrap"
+    local end="# END ${REPO_NAME} bootstrap"
+    local log="$AUR_DEPS_DIR/pacman-sy.log"
+    local sync_ok=0
+
+    if ! grep -q "^\\[${REPO_NAME}\\]$" /etc/pacman.conf 2>/dev/null; then
         echo "  [hook] Adding repo [$REPO_NAME] ($REPO_URL) to pacman.conf"
         {
-            printf '\n[%s]\n' "$REPO_NAME"
+            printf '\n%s\n' "$begin"
+            printf '[%s]\n' "$REPO_NAME"
             printf 'SigLevel = Never\n'
             printf 'Server = %s\n' "$REPO_URL"
+            printf '%s\n' "$end"
         } | sudo tee -a /etc/pacman.conf >/dev/null
     fi
 
-    local log="$AUR_DEPS_DIR/pacman-sy.log"
-    if ! sudo pacman -Sy --noconfirm >"$log" 2>&1; then
-        echo "  [hook] ✗ pacman -Sy failed" >&2
-        tail -20 "$log" >&2 || true
-        exit 1
+    for attempt in 1 2 3; do
+        if sudo pacman -Sy --noconfirm >"$log" 2>&1; then
+            sync_ok=1
+            break
+        fi
+        echo "  [hook] arch_lib sync attempt $attempt failed; retrying" >&2
+        sleep 3
+    done
+
+    if [ "$sync_ok" -eq 1 ]; then
+        return 0
     fi
+
+    # A transient/broken GitHub Release must not poison pacman globally.
+    # Remove the repo block we own and fall back to official repos + AUR builds.
+    echo "  [hook] ⚠ [$REPO_NAME] unavailable; falling back to AUR bootstrap" >&2
+    tail -20 "$log" >&2 || true
+    if grep -qF "$begin" /etc/pacman.conf 2>/dev/null; then
+        sudo sed -i "/^# BEGIN ${REPO_NAME} bootstrap$/,/^# END ${REPO_NAME} bootstrap$/d" /etc/pacman.conf
+    fi
+    sudo pacman -Sy --noconfirm >/dev/null 2>&1 || true
 }
+
 
 aur_package_base() {
     local pkg="$1"

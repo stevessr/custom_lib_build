@@ -15,7 +15,7 @@
 pkgname=claude-desktop-http-patch
 _scheme=http
 _lang=zh-CN
-pkgver=2.2553.1
+pkgver=2.7032.0
 # Increment when the pinned patch implementation changes without an upstream app bump.
 pkgrel=1
 pkgdesc="Official Claude AI desktop app, patched to allow any http:// third-party inference endpoint with Simplified Chinese UI (claude-app-patch scheme 2)"
