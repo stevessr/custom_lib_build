@@ -143,3 +143,6 @@ claude-code
 cscience-bin
 cherry-studio-bin
 umamo-git
+
+# ROS 2
+ros2-kilted
