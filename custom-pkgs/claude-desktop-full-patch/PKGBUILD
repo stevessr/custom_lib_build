@@ -21,7 +21,7 @@ _scheme=full
 _lang=zh-CN
 pkgver=2.7032.0
 # Increment when the pinned patch implementation changes without an upstream app bump.
-pkgrel=1
+pkgrel=2
 pkgdesc="Official Claude AI desktop app with feature-unlock patches, DevTools, and Simplified Chinese UI (claude-app-patch scheme 3, experimental)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/stevessr/claude-app-patch"
@@ -82,7 +82,7 @@ sha256sums=()
 _apt="https://downloads.claude.ai/claude-desktop/apt/stable"
 _patch_repo="https://github.com/stevessr/claude-app-patch"
 # Pin the patch implementation so a rebuild cannot silently change semantics.
-_patch_ref="5bb8187076edc6dfb9c312f9839a4766866fb362"
+_patch_ref="47b5b6fd6f98f7e202424b395d3693606ca67168"
 
 case "$CARCH" in
   x86_64)  _debarch=amd64 ;;
@@ -193,6 +193,21 @@ NODE
       return 1
     }
   done
+
+  # ── 5. 渲染进程（ion-dist）模型名补丁 ─────────────────────────────
+  # 3P 模型名校验在 app.asar 与 ion-dist 各有一份独立代码；漏掉渲染进程那份时，
+  # 选择器/设置页仍会报 “这似乎不是 Anthropic 模型” 并拒绝 deepseek/gpt 等名称。
+  if ! node claude-app-patch/setup.js patch-models \
+      --resources "$srcdir/deb/usr/lib/claude-desktop/resources" >"$patch_log" 2>&1; then
+    cat "$patch_log"
+    echo "Claude Desktop renderer model patch failed for version $ver"
+    return 1
+  fi
+  cat "$patch_log"
+  grep -Eq '^PATCH_RESULT renderer-models state=(patched|already-compatible) hits=[1-9][0-9]*$' "$patch_log" || {
+    echo "required renderer model patch did not pass for Claude Desktop $ver"
+    return 1
+  }
 
   patched_version="$(read_asar_version "$srcdir/patched/app.asar")"
   [ "$patched_version" = "$ver" ] || {
