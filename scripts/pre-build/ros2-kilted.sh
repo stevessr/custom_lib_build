@@ -45,4 +45,8 @@ ensure_aur_deps \
     python-colcon-zsh \
     python-colcon-common-extensions \
     sip4 \
-    lttng-tools
+    lttng-tools \
+    python-rosdistro \
+    python-rospkg \
+    python-rosinstall_generator \
+    python-vcstool
