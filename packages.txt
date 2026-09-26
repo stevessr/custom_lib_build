@@ -147,3 +147,6 @@ umamo-git
 
 # ROS 2
 ros2-kilted
+
+# blender 
+intel-level-zero-raytracing-support
