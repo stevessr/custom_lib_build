@@ -75,10 +75,11 @@ case "$PKG" in
     ;;
   cherry-studio-bin)
     REPOSITORY='CherryHQ/cherry-studio'
-    # Cherry Studio 2.0.10+ prefixes Linux AppImage assets with "linux"
-    # and uses "x64" rather than "x86_64" in the upstream filename.
-    AMD64_ASSET='Cherry-Studio-%s-linux-x64.AppImage'
-    ARM64_ASSET='Cherry-Studio-%s-linux-arm64.AppImage'
+    # 源用上游 RPM（AppImage 的 squashfs 已压缩，进 tar.zst 后几乎不再
+    # 缩；RPM payload 可再压 ~90 MB）。文件名同 AppImage 布局：linux-x64 /
+    # linux-arm64，无 CN 变体后缀。
+    AMD64_ASSET='Cherry-Studio-%s-linux-x64.rpm'
+    ARM64_ASSET='Cherry-Studio-%s-linux-arm64.rpm'
     ;;
   *)
     fail "unsupported custom package: ${PKG:-<empty>}"
@@ -155,8 +156,11 @@ if pkg == "sparkle-bin":
 elif pkg == "cherry-studio-bin":
     replacements = [
         (r'(?m)^pkgver=["\']?[0-9]+\.[0-9]+\.[0-9]+["\']?$', f'pkgver={version}'),
-        (r"(?m)(^  x86_64\)\n    _sha256sum=')[0-9a-fA-F]{64}(')$", rf"\g<1>{amd64}\g<2>"),
-        (r"(?m)(^  aarch64\)\n    _sha256sum=')[0-9a-fA-F]{64}(')$", rf"\g<1>{arm64}\g<2>"),
+        # case 块内行序可能变化（_rpm_arch 行在前），按 arch 分支锚定
+        (r"(?ms)(^  x86_64\)\n(?:(?!  aarch64\)).)*?    _sha256sum=')[0-9a-fA-F]{64}(')",
+         rf"\g<1>{amd64}\g<2>"),
+        (r"(?ms)(^  aarch64\)\n(?:(?!  x86_64\)).)*?    _sha256sum=')[0-9a-fA-F]{64}(')",
+         rf"\g<1>{arm64}\g<2>"),
     ]
 else:
     raise SystemExit(f"unsupported package: {pkg}")

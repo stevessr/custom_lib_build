@@ -8,4 +8,4 @@ if [[ -f $XDG_CONFIG_HOME/cherry-studio-flags.conf ]]; then
 fi
 
 # Launch
-exec /opt/cherry-studio-bin/cherry-studio.AppImage "$@" $CHERRY_STUDIO_USER_FLAGS
+exec /opt/cherry-studio-bin/CherryStudio "$@" $CHERRY_STUDIO_USER_FLAGS

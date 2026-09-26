@@ -3,6 +3,6 @@ Type=Application
 Name=Cherry Studio
 Comment=🍒 Cherry Studio is a desktop client that supports for multiple LLM providers
 Exec=/usr/bin/cherry-studio
-Icon=/usr/share/icons/hicolor/256x256/apps/cherry-studio.png
+Icon=cherry-studio
 Categories=Utility;
 StartupWMClass=CherryStudio

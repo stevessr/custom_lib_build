@@ -1,66 +1,60 @@
-# 由 arch_lib 维护: 复用 AUR cherry-studio-bin 结构（AppImage 打包），
-# pkgver/校验和随上游 GitHub Release 更新
-# 来源: https://aur.archlinux.org/packages/cherry-studio-bin
+# 由 arch_lib 维护：从上游 Linux RPM 解包安装。AppImage 源是 squashfs
+# （已压缩，进 tar.zst 后几乎不再缩，~387 MB）；RPM payload 可再压，
+# CI zstd-19 下包体积 ~296 MB。
 # 上游: https://github.com/CherryHQ/cherry-studio
-# 下载: https://github.com/CherryHQ/cherry-studio/releases/download/v$pkgver/Cherry-Studio-$pkgver-${_appimage_arch}.AppImage
+# 下载: https://github.com/CherryHQ/cherry-studio/releases/download/v$pkgver/Cherry-Studio-$pkgver-${_rpm_arch}.rpm
+# RPM 由 electron-builder 产出，payload 为 cpio(xz)，bsdtar (libarchive) 直接可读。
 
 pkgname=cherry-studio-bin
 _pkgname=cherry-studio
 pkgver=2.1.3
-pkgrel=1
-pkgdesc="🍒 Cherry Studio is a desktop client that supports for multiple LLM providers "
+pkgrel=2
+pkgdesc="🍒 Cherry Studio is a desktop client that supports for multiple LLM providers"
 arch=('x86_64' 'aarch64')
 url="https://github.com/cherryHQ/cherry-studio"
 license=('AGPL-3.0')
 options=('!strip' '!debug')
-depends=('fuse2')
+depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'libevdev' 'libxkbcommon-x11')
 conflicts=("$_pkgname")
 
-# Determine architecture-specific values
 case "$CARCH" in
   x86_64)
-    _appimage_arch='linux-x64'
+    _rpm_arch='linux-x64'
+    _sha256sum='f1c9fabdbe384ba69da2bdce48417ea38d08259d89acec888f966dc703b4e672'
     ;;
   aarch64)
-    _appimage_arch='linux-arm64'
+    _rpm_arch='linux-arm64'
+    _sha256sum='9833478f8d0cff045b0b9dfda1c83544e802fe383ded12b96b27fe69e90cc629'
     ;;
 esac
 
-source=("${_pkgname}-${pkgver}.AppImage::${url}/releases/download/v${pkgver}/Cherry-Studio-${pkgver}-${_appimage_arch}.AppImage"
-  "${_pkgname}.desktop"
-  "${_pkgname}.png"
-  "${pkgname}.sh")
-
-noextract=("${_pkgname}-${pkgver}.AppImage")
-
-# Architecture-specific SHA256 checksums
-case "$CARCH" in
-  x86_64)
-    _sha256sum='2e41ae9ffcee25c70d5d02ffa679fe47db45f95a2906183a261fd9ed05556d6c'
-    ;;
-  aarch64)
-    _sha256sum='947affe2b744d9eed3fb2cd7164113c973ef7696ed63499b3e2afe590e181751'
-    ;;
-esac
-
+source=("${_pkgname}-${pkgver}.rpm::${url}/releases/download/v${pkgver}/Cherry-Studio-${pkgver}-${_rpm_arch}.rpm"
+       "${_pkgname}.desktop"
+       "${pkgname}.sh")
+noextract=("${_pkgname}-${pkgver}.rpm")
 sha256sums=("$_sha256sum"
-            'fd0b11ca782c9c0de6dbf34143b7f14560b4a7020e316c58e9a5e1115551c7ee'
-            '597463003798254ab97505e2374485e55262152483f717f3169da3444de60f94'
-            '6aed5e7ca95679b2545540241dc9e6b055da1dfde696006a1712f90cfbfaec92')
+            '50c943688476bf56cb7f829485cf32060a690185901b877ece004b82d75e54ab'
+            '0123004528eff21b8336e6e0a567c2f08ec38a6221621ed652d906733ecd28ca')
+
+prepare() {
+  cd "$srcdir"
+  # RPM payload 是 cpio(xz)，bsdtar 直接解包（无需 rpm/cpio 工具）
+  bsdtar -x -f "${_pkgname}-${pkgver}.rpm" \
+    -s "|^./opt/Cherry Studio|payload|" \
+    "opt/Cherry Studio/*" "usr/share/icons/*"
+}
 
 package() {
   cd "$srcdir"
-  # Create directories
-  install -dm755 "$pkgdir/usr/bin/$pkgname"
-  install -dm755 "$pkgdir/usr/share/applications"
-  install -dm755 "$pkgdir/usr/share/icons/hicolor/256x256/apps"
+  install -dm755 "$pkgdir/opt"
+  cp -a "$srcdir/payload" "$pkgdir/opt/$pkgname"
+  chmod 755 "$pkgdir/opt/$pkgname/CherryStudio"
 
-  # Install AppImage
-  install -Dm755 "${_pkgname}-${pkgver}.AppImage" "${pkgdir}/opt/${pkgname}/${_pkgname}.AppImage"
-  # Install icon
-  install -Dm644 "$_pkgname.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/$_pkgname.png"
-  # Install desktop file
+  # 图标：RPM 自带全尺寸 hicolor（16~1024），统一改名为 cherry-studio.png
+  install -dm755 "$pkgdir/usr/share/icons/hicolor"
+  cp -a "$srcdir/usr/share/icons/hicolor/." "$pkgdir/usr/share/icons/hicolor/"
+  find "$pkgdir/usr/share/icons/hicolor" -name 'CherryStudio.png' \
+    -execdir mv {} cherry-studio.png \;
   install -Dm644 "$_pkgname.desktop" "$pkgdir/usr/share/applications/$_pkgname.desktop"
-  # Install wrapper script
-  install -m755 "${pkgname}.sh" "${pkgdir}/usr/bin/${_pkgname}"
+  install -Dm755 "${pkgname}.sh" "$pkgdir/usr/bin/${_pkgname}"
 }
