@@ -1,13 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 
-# python-colcon-notification 0.3.0 (AUR, used as a bootstrap dependency of
-# ros2-kilted) pins a setup.py that imports pkg_resources. Setuptools >= 81
-# (current Arch, Python 3.14 runners) removed pkg_resources, so the wheel
-# build dies with ModuleNotFoundError before its own version check can
-# reject anything. The upstream main branch dropped the import; patch the
-# pinned check out here. Runs before makepkg with cwd = the dependency
-# source dir ($1, passed by install_aur_dep).
+# python-colcon-notification (bootstrap dependency of ros2-kilted, and a
+# custom matrix package) needs python-colcon-core, which is AUR-only and
+# missing from official repos on a fresh runner. Bootstrap it here so
+# makepkg -s can resolve, and patch the pkg_resources check out of the
+# pinned 0.3.0 setup.py (setuptools >= 81 removed pkg_resources).
+source "$GITHUB_WORKSPACE/scripts/pre-build/aur-deps-lib.sh"
+
+ensure_aur_deps python-colcon-core
+
 dir="${1:?dependency source dir required}"
 setup_py="$dir/colcon-notification-0.3.0/setup.py"
 

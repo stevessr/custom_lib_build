@@ -1,0 +1,65 @@
+# Custom override of the AUR python-colcon-notification recipe (0.3.0).
+# Upstream pins a setup.py that imports pkg_resources; setuptools >= 81
+# (current Arch, Python 3.14) removed pkg_resources, so the wheel build
+# dies with ModuleNotFoundError before the recipe's own version check can
+# reject anything. The prepare() below deletes that conditional check.
+# Used as a bootstrap dependency of ros2-kilted and built by the normal
+# matrix; scripts/pre-build/python-colcon-notification.sh bootstraps
+# python-colcon-core first so makepkg -s can resolve on a fresh runner.
+pkgname=python-colcon-notification
+_name=${pkgname:7}
+pkgver=0.3.0
+pkgrel=2
+pkgdesc="An extension for colcon-core to provide status notifications."
+arch=(any)
+url="https://pypi.org/project/colcon-notification"
+license=('Apache')
+depends=('python-colcon-core')
+makedepends=('python-setuptools' 'flake8')
+source=(
+    https://github.com/colcon/colcon-notification/archive/refs/tags/${pkgver}.tar.gz
+    https://github.com/myint/scspell/archive/refs/tags/v2.2.tar.gz
+)
+sha256sums=(
+    'f82c6e3bcd558a9fbf4bf0b1cd0dab6a1f50c056b7b4db85c56878797d0489c2'
+    '04c6a795a9e0ef4511678eb9fc503bcf39106a975691336af778f31a01027082'
+)
+
+prepare() {
+    cd ${srcdir}/${_name}-${pkgver}
+    # Delete the whole conditional pkg_resources version check (from its
+    # `if 'BUILD_DEBIAN_PACKAGE'` line through the matching `sys.exit(1)`),
+    # keeping the cmdclass lines that follow. python3 is guaranteed by
+    # makepkg's dependency resolution.
+    python3 - <<'PY'
+p = "setup.py"
+lines = open(p).readlines()
+out, skip = [], False
+for ln in lines:
+    if not skip and "'BUILD_DEBIAN_PACKAGE' not in os.environ" in ln:
+        skip = True
+        continue
+    if skip:
+        if "sys.exit(1)" in ln:
+            skip = False
+        continue
+    out.append(ln)
+open(p, "w").writelines(out)
+PY
+}
+
+build() {
+    cd ${srcdir}/${_name}-${pkgver}
+    python -m build --wheel --no-isolation
+}
+
+check() {
+    cd ${srcdir}/${_name}-${pkgver}
+    export PYTHONPATH="${srcdir}/scspell-2.2:${srcdir}/${_name}-${pkgver}"
+    ls test*.py | xargs -I {} pytest {}
+}
+
+package() {
+    cd ${srcdir}/${_name}-${pkgver}
+    python -m installer --destdir="${pkgdir}" dist/*.whl
+}
