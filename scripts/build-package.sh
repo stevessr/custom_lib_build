@@ -46,6 +46,11 @@ MAX_RELEASE_ASSET_BYTES="${MAX_RELEASE_ASSET_BYTES:-2147483648}"
 
 # zstd level 19 is substantially smaller than Arch's default level 9 while
 # remaining within the normal (non-`--ultra`) zstd range.
+# --long=<window> enables long-distance matching: dedup blocks are ~128 KiB
+# aligned in Electron/app bundles, so a 128 MiB window measurably shrinks
+# large payloads (cherry-studio-bin: 296→196 MB, −33.6%) with no size floor.
+# Pacman needs zstd >= 1.4.4 to read --long archives (clean-install check
+# below falls back to a plain level-19 window when unsupported).
 PACKAGE_ZSTD_LEVEL="${PACKAGE_ZSTD_LEVEL:-19}"
 if [[ ! "$PACKAGE_ZSTD_LEVEL" =~ ^([1-9]|1[0-9])$ ]]; then
     echo -e "${RED}  ✗ PACKAGE_ZSTD_LEVEL must be an integer from 1 to 19${NC}"
@@ -207,8 +212,16 @@ if [ ! -r "$MAKEPKG_BASE_CONFIG" ]; then
     exit 1
 fi
 cp "$MAKEPKG_BASE_CONFIG" "$MAKEPKG_CONFIG"
-printf '\n# arch_lib package-size policy\nPKGEXT=.pkg.tar.zst\nCOMPRESSZST=(zstd -c -T0 -%s -)\n' \
-    "$PACKAGE_ZSTD_LEVEL" >> "$MAKEPKG_CONFIG"
+# --long support probe: older zstd (<1.4.4) rejects --long at decompress
+# time, so the archive must stay readable by the runner's own pacman/zstd.
+if zstd -c -T0 -"$PACKAGE_ZSTD_LEVEL" --long=27 </dev/null >/dev/null 2>&1; then
+    COMPRESS_ARGS="--long=27"
+else
+    echo -e "${YELLOW}  ⚠ zstd lacks usable --long; falling back to plain -${PACKAGE_ZSTD_LEVEL}${NC}"
+    COMPRESS_ARGS=""
+fi
+printf '\n# arch_lib package-size policy\nPKGEXT=.pkg.tar.zst\nCOMPRESSZST=(zstd -c -T0 -%s %s -)\n' \
+    "$PACKAGE_ZSTD_LEVEL" "$COMPRESS_ARGS" >> "$MAKEPKG_CONFIG"
 
 # ── 注册本仓 pacman 源：让包的 depends/makedepends 里的本仓包也能被
 # makepkg -s 解析（例如 autotrace-nomagick→pstoedit-nomagick）。
