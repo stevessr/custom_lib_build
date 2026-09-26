@@ -115,9 +115,16 @@ install_aur_dep() {
         bash "$hook" "$dir" "$pkg"
     fi
 
+    # Each dependency can use a generic upstream filename such as v2.2.tar.gz.
+    # Isolate makepkg's source cache by AUR PackageBase to prevent one package
+    # from reusing another package's unrelated archive from the shared SRCDEST.
+    # Keep the parent SRCDEST so the cache still lives on the same filesystem.
+    local dep_srcdest="${SRCDEST:-${HOME}/.cache/aur-sources}/aur-deps/$base"
+    mkdir -p "$dep_srcdest"
+
     # Bootstrap dependencies only. Skip check() to avoid pulling checkdepends or
     # running network/environment-sensitive package tests in the bootstrap path.
-    if ! ( cd "$dir" && makepkg -s --nocheck --noconfirm --needed --skippgpcheck >"$logfile" 2>&1 ); then
+    if ! ( cd "$dir" && SRCDEST="$dep_srcdest" makepkg -s --nocheck --noconfirm --needed --skippgpcheck >"$logfile" 2>&1 ); then
         echo "  [hook] ✗ makepkg failed for dependency $pkg ($base)" >&2
         tail -50 "$logfile" >&2 || true
         exit 1
