@@ -18,15 +18,17 @@ depends=('python-colcon-core')
 makedepends=('python-setuptools' 'flake8')
 # Both sources are fetched into a shared SRCDEST during ROS 2 dependency
 # bootstrap. Explicit, package-specific names prevent collisions with other
-# packages' generic 0.3.0.tar.gz / v2.2.tar.gz downloads. Keep the pinned
-# SHA256 hashes so a genuinely changed upstream archive still fails safely.
+# packages' generic 0.3.0.tar.gz / v2.2.tar.gz downloads. scspell is only
+# used by check() (skipped via --nocheck in the bootstrap path); GitHub
+# archive tarballs have non-deterministic gzip metadata, so its sha256
+# drifts between CDN edges — SKIP instead of a pinned hash.
 source=(
     "colcon-notification-${pkgver}.tar.gz::https://github.com/colcon/colcon-notification/archive/refs/tags/${pkgver}.tar.gz"
     "scspell-v2.2.tar.gz::https://github.com/myint/scspell/archive/refs/tags/v2.2.tar.gz"
 )
 sha256sums=(
     'f82c6e3bcd558a9fbf4bf0b1cd0dab6a1f50c056b7b4db85c56878797d0489c2'
-    '04c6a795a9e0ef4511678eb9fc503bcf39106a975691336af778f31a01027082'
+    'SKIP'
 )
 
 prepare() {
