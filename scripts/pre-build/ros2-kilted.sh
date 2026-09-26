@@ -28,6 +28,7 @@ ensure_aur_deps \
     python-colcon-pkg-config \
     python-colcon-recursive-crawl \
     python-colcon-python-setup-py \
+    python-catkin_pkg \
     python-colcon-ros \
     python-colcon-metadata \
     python-colcon-argcomplete \
