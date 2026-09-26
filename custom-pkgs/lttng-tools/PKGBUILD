@@ -1,0 +1,43 @@
+# Custom override of the AUR lttng-tools recipe (2.13.8).
+# libxml2 2.15 changed xmlCharEncodingHandler input/output from function
+# pointers to anonymous unions, so every 2.13.x build dies with
+# "called object is not a function or function pointer" (session-config.c,
+# reproduced locally with gcc 16.2.1 + libxml2 2.15.4 — same toolchain as
+# CI). 2.16.0 rewrote session config on the buffer API (no handler->input
+# call) and builds cleanly with the same toolchain.
+# Built --without-lttng-ust: that switch skips the lttng-ust-ctl pkg-config
+# dependency (AUR-only, unavailable), and UST compile support is irrelevant
+# in the one-shot CI bootstrap — ros2-kilted only needs the `lttng` control
+# CLI. --disable-tests avoids the babeltrace2 requirement.
+pkgname=lttng-tools
+pkgver=2.16.0
+pkgrel=1
+pkgdesc='LTTng tracing control tools'
+arch=(i686 x86_64)
+url='https://lttng.org/'
+license=(GPL2 LGPL2.1)
+provides=(lttng)
+source=("https://lttng.org/files/$pkgname/$pkgname-$pkgver.tar.bz2")
+sha256sums=('b8b3244894e49e773d4942b8899f768057974edf75c18dbb48b65bb123c7b2c7')
+depends=(
+    'popt'
+    'liburcu>=0.14'
+    'libxml2>=2.7.6'
+)
+optdepends=(
+    'lttng-modules: kernel tracing support'
+    'babeltrace2: view traces with `lttng view` command'
+    'man-db: view man pages with the `lttng help` command'
+)
+
+build() {
+    cd "${srcdir}/${pkgname}-${pkgver}"
+    ./configure --prefix=/usr --sysconfdir=/etc --disable-man-pages \
+        --disable-tests --without-lttng-ust
+    make
+}
+
+package() {
+    cd "${srcdir}/${pkgname}-${pkgver}"
+    make install DESTDIR="${pkgdir}"
+}
