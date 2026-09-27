@@ -50,3 +50,13 @@ ensure_aur_deps \
     python-rosdistro \
     python-rosinstall_generator \
     python-vcstool
+
+# Catch broken vcstool early (before ROS downloads/repository checkout).
+# "vcs help import" exercises the command entry-point dispatcher as well as
+# the main CLI import, unlike "vcs --version" alone.
+if ! vcs help import >/dev/null 2>&1; then
+    echo "  [hook] python-vcstool is installed but its CLI is unusable" >&2
+    vcs help import >&2 || true
+    exit 1
+fi
+echo "  [hook] ✓ vcstool command dispatcher works"
