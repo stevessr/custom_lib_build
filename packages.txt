@@ -146,6 +146,8 @@ cherry-studio-bin
 umamo-git
 
 # ROS 2
+# Patched legacy setuptools plugins required by the colcon build chain.
+python-pytest-runner
 # Packaged with an importlib.metadata fix for setuptools >= 82 / Python 3.14.
 python-vcstool
 ros2-kilted
