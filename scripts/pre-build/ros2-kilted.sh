@@ -51,6 +51,19 @@ ensure_aur_deps \
     python-rosinstall_generator \
     python-vcstool
 
+# setuptools discovers legacy distutils.commands entry points when colcon
+# probes Python package metadata. The AUR pytest-runner plugin must be
+# importable on modern Arch before we start the expensive ROS source checkout.
+if ! python - <<'PY' >/dev/null
+from setuptools import setup
+setup(name='arch-lib-ros2-setuptools-probe', version='0', script_args=['--help-commands'])
+PY
+then
+    echo "  [hook] setuptools command discovery failed (check python-pytest-runner)" >&2
+    exit 1
+fi
+echo "  [hook] ✓ setuptools command discovery works"
+
 # Catch broken vcstool early (before ROS downloads/repository checkout).
 # "vcs help import" exercises the command entry-point dispatcher as well as
 # the main CLI import, unlike "vcs --version" alone.
