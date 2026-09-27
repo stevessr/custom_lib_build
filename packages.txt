@@ -150,3 +150,6 @@ ros2-kilted
 
 # blender 
 intel-level-zero-raytracing-support
+
+# UU
+uuyc-wine
