@@ -19,9 +19,9 @@
 pkgname=claude-desktop-full-patch
 _scheme=full
 _lang=zh-CN
-pkgver=2.7032.0
+pkgver=2.9939.4
 # Increment when the pinned patch implementation changes without an upstream app bump.
-pkgrel=2
+pkgrel=1
 pkgdesc="Official Claude AI desktop app with feature-unlock patches, DevTools, and Simplified Chinese UI (claude-app-patch scheme 3, experimental)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/stevessr/claude-app-patch"
