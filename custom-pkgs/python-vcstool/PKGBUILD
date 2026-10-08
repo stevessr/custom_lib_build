@@ -1,0 +1,54 @@
+# Custom override of the AUR python-vcstool recipe (0.3.0).
+# vcstool's commands/help.py imports pkg_resources; setuptools >= 81
+# (current Arch, Python 3.14) removed pkg_resources, so `vcs import` —
+# which ros2-kilted's prepare() runs — dies with ModuleNotFoundError.
+# Upstream (dirk-thomas/vcstool, archived) still uses the import even on
+# master. The prepare() below swaps it for importlib.metadata.
+# Used as a makedepends bootstrap dependency of ros2-kilted.
+pkgname=python-vcstool
+_name=${pkgname:7}
+pkgver=0.3.0
+pkgrel=2
+pkgdesc="VCS import/export/status tool"
+arch=(any)
+url="https://github.com/dirk-thomas/vcstool"
+license=('Apache')
+depends=('python' 'python-setuptools' 'python-yaml')
+source=("https://github.com/dirk-thomas/vcstool/archive/${pkgver}.tar.gz")
+sha256sums=('2b6e4a97454983166e9a5fe08aca41cd8b28288ef693b954bc0e8b8518eafd3b')
+
+prepare() {
+    cd ${srcdir}/${_name}-${pkgver}
+    python3 - <<'PY'
+p = "vcstool/commands/help.py"
+src = open(p).read()
+src = src.replace(
+    "from pkg_resources import load_entry_point",
+    "from importlib.metadata import entry_points as _entry_points\n\n\ndef load_entry_point(distribution, group, name):\n"
+    "    for ep in _entry_points(group=group):\n"
+    "        if ep.name == name and distro_name_matches(ep, distribution):\n"
+    "            return ep.load()\n"
+    "    raise ImportError('no entry point %s:%s' % (distribution, name))\n\n\n"
+    "def distro_name_matches(ep, distribution):\n"
+    "    # importlib entry_points expose the distro via .distro on 3.10+;\n"
+    "    # fall back to matching only on the entry point name, which is\n"
+    "    # unique within the group here ('vcs-<command>').\n"
+    "    return True")
+src = src.replace(
+    "    return load_entry_point(\n"
+    "        'vcstool', 'console_scripts', 'vcs-' + commands[0])",
+    "    return load_entry_point(\n"
+    "        'vcstool', 'console_scripts', 'vcs-' + commands[0])")
+open(p, "w").write(src)
+PY
+}
+
+build() {
+    cd ${srcdir}/${_name}-${pkgver}
+    python -m build --wheel --no-isolation
+}
+
+package() {
+    cd ${srcdir}/${_name}-${pkgver}
+    python -m installer --destdir="${pkgdir}" dist/*.whl
+}

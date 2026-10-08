@@ -157,3 +157,7 @@ intel-level-zero-raytracing-support
 
 # UU
 uuyc-wine
+
+
+# rime
+fcitx5-pinyin-custom-pinyin-dictionary
