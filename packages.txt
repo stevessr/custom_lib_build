@@ -127,7 +127,8 @@ github-copilot-cli-bin
 kiro-cli
 kiro-ide
 
-
+#qs
+quickshell-git
 
 # niri
 greetd-dms-greeter-bin
