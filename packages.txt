@@ -140,11 +140,13 @@ umbriel
 # Minecraft
 glfw-wayland-minecraft-cursorfix
 
-# Custom PKGBUILD (GitHub release 原生构建，见 custom-pkgs/ 目录)
+# Custom PKGBUILD (见 custom-pkgs/ 目录)
 claude-code
 cscience-bin
 cherry-studio-bin
 umamo-git
+magpie-bin
+magpie-cli-bin
 
 # ROS 2
 # Patched legacy setuptools plugins required by the colcon build chain.

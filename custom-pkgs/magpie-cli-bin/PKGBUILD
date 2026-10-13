@@ -1,0 +1,84 @@
+# Maintainer: stevessr
+# Upstream: https://github.com/yetone/magpie
+# Releases: https://github.com/yetone/magpie-releases
+
+pkgname=magpie-cli-bin
+pkgver=0.0.0
+pkgrel=1
+pkgdesc='Prebuilt terminal-only CLI for Magpie'
+arch=('x86_64' 'aarch64')
+url='https://github.com/yetone/magpie'
+license=('MIT')
+depends=('glibc')
+makedepends=('curl' 'jq')
+options=('!strip')
+source=()
+sha256sums=()
+
+prepare() {
+  cd "$srcdir"
+
+  local release_json latest asset_name asset_api digest upstream_arch
+  release_json="$(mktemp)"
+  trap 'rm -f "$release_json"' RETURN
+
+  case "$CARCH" in
+    x86_64) upstream_arch='amd64' ;;
+    aarch64) upstream_arch='arm64' ;;
+    *) echo "Unsupported architecture: $CARCH" >&2; return 1 ;;
+  esac
+
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2026-03-10' \
+    'https://api.github.com/repos/yetone/magpie-releases/releases/latest' \
+    -o "$release_json"
+
+  latest="$(jq -r '.tag_name // empty | sub("^v"; "")' "$release_json")"
+  if [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Unable to determine latest Magpie release version" >&2
+    return 1
+  fi
+
+  asset_name="magpie-cli-linux-${upstream_arch}"
+  asset_api="$(jq -r --arg n "$asset_name" \
+    '.assets[]? | select(.name == $n and .state == "uploaded") | .url' \
+    "$release_json" | head -n1)"
+  digest="$(jq -r --arg n "$asset_name" \
+    '.assets[]? | select(.name == $n and .state == "uploaded") | .digest // empty' \
+    "$release_json" | head -n1)"
+
+  if [ -z "$asset_api" ]; then
+    echo "Latest release v$latest has no uploaded $asset_name asset" >&2
+    return 1
+  fi
+  if [[ ! "$digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]]; then
+    echo "Latest release v$latest has no usable SHA-256 digest for $asset_name" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$latest" > .magpie-version
+  echo "Downloading GitHub release asset: $asset_name"
+  curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
+    -H 'Accept: application/octet-stream' \
+    -H 'X-GitHub-Api-Version: 2026-03-10' \
+    "$asset_api" -o "$asset_name"
+  printf '%s  %s\n' "${digest#sha256:}" "$asset_name" | sha256sum -c -
+}
+
+pkgver() {
+  cat "$srcdir/.magpie-version"
+}
+
+package() {
+  local upstream_arch
+  case "$CARCH" in
+    x86_64) upstream_arch='amd64' ;;
+    aarch64) upstream_arch='arm64' ;;
+    *) echo "Unsupported architecture: $CARCH" >&2; return 1 ;;
+  esac
+
+  # Keep the CLI-only build alongside magpie-bin without replacing its GUI-capable command.
+  install -Dm755 "$srcdir/magpie-cli-linux-${upstream_arch}" \
+    "$pkgdir/usr/bin/magpie-cli"
+}

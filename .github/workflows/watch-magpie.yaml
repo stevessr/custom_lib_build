@@ -1,0 +1,107 @@
+# =============================================================================
+# Magpie 专项监听 — 跟踪 yetone/magpie-releases 的发布事件
+#
+# 上游 Magpie（AI agent 网关 + 桌面端）由 magpie-releases 仓库发布，
+# 包含 magpie-linux-{amd64,arm64}（GUI，供 magpie-bin）与
+# magpie-cli-linux-{amd64,arm64}（终端版，供 magpie-cli-bin）。
+# 上游几乎全天候滚动发版（历史记录多小时内连发多个版本），通用
+# update-daily（23:30 UTC 一次）跟不上，故单独监听 release.published。
+#
+# 设计：
+#   - "监听"实现：repository_dispatch（上游 release 事件 webhook 转发）
+#     + 兜底 cron（每 6h，防止 webhook 缺失时最多滞后 6h，同时覆盖
+#     最新 release 不在首页/为草稿等边缘情况）。
+#   - 幂等：比较 latest 上 version-magpie-bin.txt 与上游最新 tag，
+#     相同则直接退出，不触发任何构建/发布。
+#   - 上游更新 → 触发 build-repo.yaml 的完整编排（build → publish），
+#     publish-release.sh 增量上传：只有 magpie-bin/magpie-cli-bin 两个
+#     包文件替换，其余资产原样保留，db 最后重建，pacman 无 404 窗口。
+# =============================================================================
+name: Watch Magpie Releases
+
+# 同一编排入口，避免与每日 cron / push 并发发布互相覆盖。
+concurrency:
+  group: arch-lib-build-repository
+  cancel-in-progress: true
+
+on:
+  # 上游 release webhook（repository_dispatch）转发到这里：
+  #   event_type: magpie-release
+  #   client_payload: {"tag": "v0.1.1219"}
+  # 上游转发方式见仓库 README "Magpie 自动更新" 一节。
+  repository_dispatch:
+    types: [magpie-release]
+  schedule:
+    # 每 6h 兜底轮询一次（00:00 已有 build-repo 全量跑，错开）。
+    - cron: '0 6 * * *'
+    - cron: '0 12 * * *'
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      version: ${{ steps.compare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare upstream latest release tag with published version
+        id: compare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          upstream="$(gh api repos/yetone/magpie-releases/releases/latest \
+            --jq '.tag_name // empty' 2>/dev/null || true)"
+          if [ -z "$upstream" ]; then
+            echo "::warning::无法获取 yetone/magpie-releases latest，跳过本次检查"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version="${upstream#v}"
+          echo "Upstream tag: $upstream → version: $version"
+
+          # magpie-bin 与 magpie-cli-bin 共用同一上游版本；以 magpie-bin
+          # 的已发布 version 文件为唯一事实来源。
+          published="$(curl -fsSL --max-time 30 --retry 5 --retry-all-errors \
+            --retry-delay 2 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/latest/version-magpie-bin.txt" \
+            2>/dev/null | tr -d '[:space:]' || true)"
+          echo "Published version: ${published:-<none>}"
+
+          if [ "$version" = "$published" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "Upstream version unchanged — no rebuild needed."
+            exit 0
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # 只构建 magpie-bin / magpie-cli-bin 两个包（增量发布：publish-release.sh
+  # 只替换这两个包的资产 + 重建 db，其余包文件不动）。
+  build:
+    needs: check
+    if: ${{ needs.check.outputs.changed == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg:
+          - magpie-bin
+          - magpie-cli-bin
+    uses: ./.github/workflows/build-package.yaml
+    with:
+      package: ${{ matrix.pkg }}
+
+  publish:
+    needs: [check, build]
+    if: ${{ always() && !cancelled() && needs.check.outputs.changed == 'true' }}
+    uses: ./.github/workflows/publish-repo.yaml
+    secrets: inherit
