@@ -164,3 +164,6 @@ uuyc-wine
 
 # rime
 fcitx5-pinyin-custom-pinyin-dictionary
+
+# pdf
+stirling-pdf
