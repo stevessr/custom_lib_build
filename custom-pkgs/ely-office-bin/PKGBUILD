@@ -1,0 +1,84 @@
+# Maintained in arch_lib: repack ElyOffice's official Arch binaries as one suite.
+# Upstream currently publishes one Arch package per app rather than a suite package.
+pkgname=ely-office-bin
+_pkgname=ElyOffice
+pkgver=0.1.12
+pkgrel=1
+pkgdesc='Prebuilt ElyOffice desktop suite (Doc, Mail, Mark, PDF, Show, Table, Tree)'
+arch=('x86_64')
+url='https://github.com/ELY-Open-Source/ElyOffice'
+license=('MIT')
+depends=('glibc' 'libgcc' 'libstdc++' 'krb5' 'e2fsprogs' 'libxcb' 'libx11'
+         'vulkan-icd-loader' 'wayland' 'curl' 'expat' 'zlib' 'alsa-lib'
+         'fontconfig' 'freetype2' 'fribidi' 'mesa' 'gmp' 'harfbuzz'
+         'libgpg-error' 'util-linux-libs')
+makedepends=('curl' 'jq' 'libarchive')
+provides=('ely-office')
+conflicts=('ely-doc' 'ely-mail' 'ely-mark' 'ely-pdf' 'ely-show' 'ely-table' 'ely-tree')
+options=('!strip')
+source=()
+sha256sums=()
+
+_apps=('doc' 'mail' 'mark' 'pdf' 'show' 'table' 'tree')
+
+prepare() {
+  cd "$srcdir"
+
+  local release_json tag version slug asset_name asset_api digest
+  release_json="$(mktemp)"
+  trap 'rm -f "$release_json"' RETURN
+
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2026-03-10' \
+    'https://api.github.com/repos/ELY-Open-Source/ElyOffice/releases/latest' \
+    -o "$release_json"
+
+  tag="$(jq -r '.tag_name // empty' "$release_json")"
+  version="${tag#v}"
+  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo 'Unable to determine latest ElyOffice release version' >&2
+    return 1
+  fi
+
+  for slug in "${_apps[@]}"; do
+    asset_name="ely-${slug}-${version}-1-x86_64.pkg.tar.zst"
+    asset_api="$(jq -r --arg n "$asset_name" \
+      '.assets[]? | select(.name == $n and .state == "uploaded") | .url' \
+      "$release_json" | head -n1)"
+    digest="$(jq -r --arg n "$asset_name" \
+      '.assets[]? | select(.name == $n and .state == "uploaded") | .digest // empty' \
+      "$release_json" | head -n1)"
+
+    if [[ -z "$asset_api" ]]; then
+      echo "Latest release $tag has no uploaded $asset_name asset" >&2
+      return 1
+    fi
+    if [[ ! "$digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]]; then
+      echo "Latest release $tag has no usable SHA-256 digest for $asset_name" >&2
+      return 1
+    fi
+
+    echo "Downloading ElyOffice release asset: $asset_name"
+    curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
+      -H 'Accept: application/octet-stream' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      "$asset_api" -o "$asset_name"
+    printf '%s  %s\n' "${digest#sha256:}" "$asset_name" | sha256sum -c -
+  done
+
+  printf '%s\n' "$version" > .ely-office-version
+}
+
+pkgver() {
+  cat "$srcdir/.ely-office-version"
+}
+
+package() {
+  local slug asset_name
+  for slug in "${_apps[@]}"; do
+    asset_name="ely-${slug}-${pkgver}-1-x86_64.pkg.tar.zst"
+    bsdtar -xf "$srcdir/$asset_name" -C "$pkgdir" \
+      --exclude=.PKGINFO --exclude=.BUILDINFO --exclude=.MTREE --exclude=.INSTALL
+  done
+}

@@ -39,6 +39,8 @@ libumem-git
 imagemagick-full
 hw-probe
 qt6ct-kde
+# ElyTerminal (officially maintained AUR package)
+elyterminal-bin
 darkly-bin
 openlogi-bin
 cline-cli
@@ -147,6 +149,7 @@ cherry-studio-bin
 umamo-git
 magpie-bin
 magpie-cli-bin
+ely-office-bin
 
 # ROS 2
 # Patched legacy setuptools plugins required by the colcon build chain.
