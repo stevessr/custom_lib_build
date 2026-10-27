@@ -176,3 +176,7 @@ kirigami2
 
 # VR
 wayvr
+xrizer
+wivrn-dashboard
+wivrn-server
+wivrn-client
