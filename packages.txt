@@ -173,3 +173,6 @@ stirling-pdf
 
 # unknown
 kirigami2
+
+# VR
+wayvr
