@@ -170,6 +170,7 @@ fcitx5-pinyin-custom-pinyin-dictionary
 
 # pdf
 stirling-pdf
+stirling-pdf-bin
 
 # unknown
 kirigami2
