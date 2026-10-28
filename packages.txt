@@ -184,3 +184,5 @@ xrizer
 wivrn-dashboard
 wivrn-server
 wivrn-client
+alvr-launcher-bin
+alvr
