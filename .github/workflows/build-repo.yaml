@@ -1,7 +1,7 @@
 # =============================================================================
 # Build AUR Repository — daily cron + manual trigger (orchestrator)
 #
-# 编排器：调度（schedule/push/manual）→ prepare → build（matrix）→
+# 编排器：调度（schedule/push/manual/webhook）→ prepare → build（matrix）→
 # publish（调 publish-repo.yaml）→ deploy-s3（调 deploy-s3.yaml，可选）
 #
 # 子工作流（各自可独立复用/手动触发）：
@@ -24,6 +24,9 @@ on:
   schedule:
     - cron: '0 0 * * *'
   workflow_dispatch:
+  # Optional signed upstream webhook relay; payload never controls checkout.
+  repository_dispatch:
+    types: [openuuyc-update]
   push:
     branches:
       - master
@@ -68,7 +71,7 @@ jobs:
           declare -A seen_base=()
           kept=()
           for pkg in "${pkgs[@]}"; do
-            # custom 包总是重建，不参与去重
+            # 自定义配方优先于 AUR，不参与 AUR PackageBase 去重
             if [ -f "custom-pkgs/$pkg/PKGBUILD" ]; then
               kept+=("$pkg")
               continue

@@ -4,9 +4,9 @@
 # 判断某个包是否需要重建。
 #
 # 版本判定语义与 build-package.sh 保持一致（同一仓库内两处必须同步）：
-#   - custom-pkgs/<pkg>/ 存在     → 总是重建（current_ver=custom）
-#   - <pkg>-git 包                → 取 source=() 第一个 git+ URL 的
+#   - <pkg>-git 包（含 custom）   → 取 source=() 第一个 git+ URL 的
 #                                   HEAD commit（git ls-remote）
+#   - 其他 custom-pkgs/<pkg>/ 包  → 总是重建（current_ver=custom）
 #   - 普通 AUR 包                 → PKGBUILD 静态 pkgver
 #
 # 判定规则（普通包，自愈式）：
@@ -42,37 +42,40 @@ write_result() {
     echo "  check-version($PKG): needs_build=$1 version=$2 pkgname=${pkglist:-}"
 }
 
-# ── 1. Custom PKGBUILD → 总是重建 ──────────────────────────────────
+# ── 1. Custom PKGBUILD：-git 复用 commit 判定，其他包总是重建 ───────
 if [ -f "$WS/custom-pkgs/$PKG/PKGBUILD" ]; then
-    write_result true custom
-    exit 0
-fi
+    if [[ "$PKG" != *-git ]]; then
+        write_result true custom
+        exit 0
+    fi
+    cd "$WS/custom-pkgs/$PKG"
+else
+    # ── 2. 定位 AUR PackageBase（split 包如 rustrover-jre → rustrover）
+    base="$PKG"
+    for attempt in 1 2 3; do
+        base=$(curl -fsSL --max-time 10 \
+            "https://aur.archlinux.org/rpc/v5/info?arg[]=$PKG" \
+            | jq -r '.results[0].PackageBase // empty' 2>/dev/null || true)
+        [ -n "$base" ] && break
+        echo "  (AUR RPC attempt $attempt failed; retrying)"
+        sleep 3
+    done
+    [ -n "$base" ] || base="$PKG"
 
-# ── 2. 定位 AUR PackageBase（split 包如 rustrover-jre → rustrover）──
-base="$PKG"
-for attempt in 1 2 3; do
-    base=$(curl -fsSL --max-time 10 \
-        "https://aur.archlinux.org/rpc/v5/info?arg[]=$PKG" \
-        | jq -r '.results[0].PackageBase // empty' 2>/dev/null || true)
-    [ -n "$base" ] && break
-    echo "  (AUR RPC attempt $attempt failed; retrying)"
-    sleep 3
-done
-[ -n "$base" ] || base="$PKG"
-
-# ── 3. 下载 PKGBUILD（cgit plain，单文件，比 clone 轻）─────────────
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
-if ! curl -fsSL --max-time 30 --retry 5 --retry-all-errors --retry-delay 3 \
-    "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$base" \
-    -o "$TMP_DIR/PKGBUILD" 2>/dev/null; then
-    echo "  ⚠ AUR PKGBUILD fetch failed for $PKG — conservative rebuild"
-    write_result true unknown
-    exit 0
+    # ── 3. 下载 PKGBUILD（cgit plain，单文件，比 clone 轻）───────────
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TMP_DIR"' EXIT
+    if ! curl -fsSL --max-time 30 --retry 5 --retry-all-errors --retry-delay 3 \
+        "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$base" \
+        -o "$TMP_DIR/PKGBUILD" 2>/dev/null; then
+        echo "  ⚠ AUR PKGBUILD fetch failed for $PKG — conservative rebuild"
+        write_result true unknown
+        exit 0
+    fi
+    cd "$TMP_DIR"
 fi
 
 # ── 4. 计算当前版本（语义与 build-package.sh 相同）──────────────────
-cd "$TMP_DIR"
 
 # pkgname 列表（split 包同族，如 rustrover → rustrover,rustrover-jre）
 # 供 reuse job 为同族包一并刷新 version 文件（共享同一 pkgver）

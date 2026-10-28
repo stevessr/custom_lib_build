@@ -102,6 +102,9 @@ npx wrangler secret put S3_SECRET_ACCESS_KEY
 |---|---|---|
 | `S3_REGION` | `us-east-1` | S3 区域 |
 | `BASE_PATH` | 空 | 客户端 URL 前缀（见 §7），留空则 Worker 根路径即桶根 |
+| `GITHUB_DISPATCH_REPOSITORY` | `stevessr/custom_lib_build` | Webhook 触发的目标构建仓库 |
+| `OPENUUYC_UPSTREAM_REPOSITORY` | `stevessr/openuuyc-linux` | 允许触发更新的源仓库 |
+| `OPENUUYC_UPSTREAM_BRANCH` | `linux-port` | 允许触发更新的源码分支，与 PKGBUILD 保持一致 |
 
 > 修改 `wrangler.toml` 后重新 `npx wrangler deploy` 生效；全部变量也可在
 > Cloudflare Dashboard → Workers → 你的 Worker → **设置 → 变量** 中可视化配置。
@@ -148,3 +151,46 @@ sudo pacman -S <包名>
 
 > 若设置了 `BASE_PATH`，Server 需带上前缀，例如 `https://worker.example.com/arch-lib`；
 > Worker 会剥掉前缀再访问桶内对象。
+
+## OpenUUYC webhook（可选）
+
+默认每日构建已包含 `openuuyc-git`。需要源分支更新后立即触发时，可在现有 Worker 启用 GitHub 原生 webhook 接收器；**只使用 webhook 时不需要 S3 凭证**。未配置以下两个 Secret 时，接收器返回 404，不影响现有下载代理和每日检查。
+
+1. 先将包含 `openuuyc-update` 的 `build-repo.yaml` 部署到目标仓库的默认分支；GitHub 的 `repository_dispatch` 只从默认分支读取工作流。
+2. 在 `wrangler.toml` 的 `[vars]` 核对目标仓库及源仓库/分支。Fork 本构建仓库时，修改 `GITHUB_DISPATCH_REPOSITORY`；源仓库/分支必须与 `custom-pkgs/openuuyc-git/PKGBUILD` 的 `source` 一致，这些变量不会切换实际构建输入。
+3. 创建仅授权目标构建仓库的 GitHub fine-grained PAT，授予 **Contents: Read and write**。它用来创建 `repository_dispatch`，不要使用会暴露给客户端的令牌。
+4. 为 Worker 配置两个加密 Secret，然后部署。命令通过交互输入值，不要把值写进 `wrangler.toml`、仓库或命令历史：
+
+   ```bash
+   npx wrangler secret put GITHUB_WEBHOOK_SECRET
+   npx wrangler secret put GITHUB_DISPATCH_TOKEN
+   npx wrangler deploy
+   ```
+
+   `GITHUB_WEBHOOK_SECRET` 使用随机高熵值；`GITHUB_DISPATCH_TOKEN` 使用上一步的 PAT。这两项是 **Worker Secret**，不是 GitHub Actions Secret。
+
+5. 在 `stevessr/openuuyc-linux` 的 **Settings → Webhooks → Add webhook** 配置：
+
+   | 设置 | 值 |
+   |---|---|
+   | Payload URL | `https://<Worker域名>/webhooks/openuuyc`；若 `BASE_PATH=arch-lib`，使用 `/arch-lib/webhooks/openuuyc` |
+   | Content type | `application/json` |
+   | Secret | 与 `GITHUB_WEBHOOK_SECRET` 完全相同 |
+   | SSL verification | 启用 |
+   | Events | Just the push event |
+   | Active | 启用 |
+
+接收器先用原始请求字节验证 `X-Hub-Signature-256`（HMAC-SHA256），再检查源仓库、分支、非删除 push 和 commit hash。符合条件时向目标仓库发送 `event_type=openuuyc-update`；无关分支或事件被忽略。签名密钥和 PAT 都不会返回给调用方。
+
+在源仓库 Webhook 的 **Recent Deliveries** 检查响应：首次签名 `ping` 为 200，成功派发或忽略事件为 202（响应正文分别为 `Accepted` / `Ignored`），签名失败为 401，JSON 无效为 400，未配置 Secret 为 404，GitHub 派发失败为 502。确认 `Accepted` 后，在目标仓库 Actions 查看 **Build AUR Repository**。
+
+Webhook 运行现有完整构建/复用/发布编排，不用单包数据库覆盖整个仓库；`-git` 源码 commit 未变时复用产物。停止即时触发可在源仓库停用此 webhook，每日检查仍继续。
+
+本地验证：
+
+```bash
+node --test cloudflare/worker.test.mjs
+```
+
+协议参考：[GitHub 签名验证](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)、[创建 repository dispatch](https://docs.github.com/en/rest/repos/repos#create-a-repository-dispatch-event)。
+

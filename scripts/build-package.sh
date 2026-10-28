@@ -134,13 +134,7 @@ cd "$PKG_DIR"
 # ── Determine current version ────────────────────────────────────────
 echo -e "${BLUE}  Determining current version of $PKG ...${NC}"
 
-if [ "$IS_CUSTOM" -eq 1 ]; then
-    # Custom PKGBUILD: npm-style packages version via pkgver() at build
-    # time; use a unique marker so we always rebuild (npm versions are
-    # dynamic and makepkg resolves them via pkgver())
-    current_ver="custom-$(date -u +%Y%m%d%H%M)"
-    echo "  Custom PKGBUILD — will always rebuild"
-elif [[ "$PKG" == *-git ]]; then
+if [[ "$PKG" == *-git ]]; then
     # -git: find first git+ source URL, query upstream HEAD commit
     git_urls="$(
         bash -c '
@@ -181,6 +175,10 @@ elif [[ "$PKG" == *-git ]]; then
         fi
         echo "  Upstream commit: $current_ver"
     fi
+elif [ "$IS_CUSTOM" -eq 1 ]; then
+    # Non-VCS custom packages resolve their version inside makepkg.
+    current_ver="custom-$(date -u +%Y%m%d%H%M)"
+    echo "  Custom PKGBUILD — will always rebuild"
 else
     current_ver="$(bash -c 'source PKGBUILD; echo "${pkgver:-unknown}"')"
     echo "  PKGBUILD pkgver: $current_ver"
@@ -309,10 +307,9 @@ if [ "${#built_files[@]}" -eq 0 ]; then
     exit 1
 fi
 
-# Custom packages resolve their real version inside makepkg (for example, the
-# Claude Desktop version read from the upstream apt index). Use the package
-# metadata rather than the synthetic custom-build timestamp in release metadata.
-if [ "$IS_CUSTOM" -eq 1 ]; then
+# Non-VCS custom packages resolve their real version inside makepkg. VCS
+# metadata must retain the upstream commit for the next version check.
+if [ "$IS_CUSTOM" -eq 1 ] && [[ "$PKG" != *-git ]]; then
     custom_pkg_version=""
     for pkgfile in "${built_files[@]}"; do
         name=$(pacman -Qip "$pkgfile" 2>/dev/null | grep '^Name' | awk '{print $3}') || continue

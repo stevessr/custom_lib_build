@@ -1,4 +1,4 @@
-// cloudflare/worker.js — S3 私有桶代理 + 静态资源分流
+// cloudflare/worker.js — S3 私有桶代理 + 静态资源分流 + 可选 GitHub webhook
 //
 // 让 pacman 无需凭证即可通过 Cloudflare Worker 访问 pacman 仓库：
 //   - <25MB 的文件（db/files/签名/元数据/小包）由部署 workflow 嵌入
@@ -52,10 +52,6 @@ const RESPONSE_HEADERS = [
 export default {
   async fetch(request, env, ctx) {
     const method = request.method;
-    if (method !== 'GET' && method !== 'HEAD') {
-      return new Response('Method Not Allowed', { status: 405 });
-    }
-
     // 剥离 BASE_PATH 前缀得到桶内 key
     const url = new URL(request.url);
     const basePath = (env.BASE_PATH || '').replace(/^\/+|\/+$/g, '');
@@ -70,6 +66,14 @@ export default {
     key = key.replace(/^\/+/, '');
     if (!key) {
       return new Response('Not Found', { status: 404 });
+    }
+
+    // Webhook 不经过静态资源、S3 或下载缓存。
+    if (key === 'webhooks/openuuyc') {
+      return handleOpenUUYCWebhook(request, env);
+    }
+    if (method !== 'GET' && method !== 'HEAD') {
+      return new Response('Method Not Allowed', { status: 405 });
     }
 
     // ── 静态资源优先（<25MB 文件由 deploy-cloudflare.yaml 嵌入 assets）─
@@ -148,6 +152,82 @@ export default {
     return response;
   },
 };
+
+async function handleOpenUUYCWebhook(request, env) {
+  const respond = (message, status) => new Response(message, {
+    status,
+    headers: { 'Cache-Control': 'no-store' },
+  });
+  if (!env.GITHUB_WEBHOOK_SECRET || !env.GITHUB_DISPATCH_TOKEN) {
+    return respond('Not Found', 404);
+  }
+  if (request.method !== 'POST') {
+    return respond('Method Not Allowed', 405);
+  }
+
+  const signature = /^sha256=([0-9a-fA-F]{64})$/.exec(
+    request.headers.get('X-Hub-Signature-256') || '',
+  );
+  if (!signature) return respond('Unauthorized', 401);
+  const body = await request.arrayBuffer();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(env.GITHUB_WEBHOOK_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+  const signatureBytes = Uint8Array.from(
+    signature[1].match(/../g), value => parseInt(value, 16),
+  );
+  if (!await crypto.subtle.verify('HMAC', key, signatureBytes, body)) {
+    return respond('Unauthorized', 401);
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(body));
+  } catch {
+    return respond('Invalid JSON', 400);
+  }
+  const event = request.headers.get('X-GitHub-Event');
+  if (event === 'ping') return respond('pong', 200);
+  const repository = env.OPENUUYC_UPSTREAM_REPOSITORY || 'stevessr/openuuyc-linux';
+  const ref = `refs/heads/${env.OPENUUYC_UPSTREAM_BRANCH || 'linux-port'}`;
+  if (event !== 'push' || payload?.repository?.full_name !== repository
+      || payload.ref !== ref || payload.deleted !== false
+      || typeof payload.after !== 'string' || !/^[0-9a-fA-F]{40}$/.test(payload.after)
+      || /^0+$/.test(payload.after)) {
+    return respond('Ignored', 202);
+  }
+
+  // 目标和事件类型只由受信配置决定；payload 不控制 checkout 或命令。
+  const target = env.GITHUB_DISPATCH_REPOSITORY || 'stevessr/custom_lib_build';
+  try {
+    const dispatch = await fetch(`https://api.github.com/repos/${target}/dispatches`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.GITHUB_DISPATCH_TOKEN}`,
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'arch-lib-webhook',
+        'X-GitHub-Api-Version': '2026-03-10',
+      },
+      body: JSON.stringify({
+        event_type: 'openuuyc-update',
+        client_payload: { repository, ref, after: payload.after },
+      }),
+    });
+    if (dispatch.status !== 204) {
+      await dispatch.body?.cancel();
+      return respond('GitHub dispatch failed', 502);
+    }
+    return respond('Accepted', 202);
+  } catch {
+    return respond('GitHub dispatch failed', 502);
+  }
+}
+
 
 // ── AWS Signature V4（无依赖实现，可用 node 单测）────────────────────
 // headers: { 小写头名：值 }，canonical 排序与 signed-headers 自动生成。

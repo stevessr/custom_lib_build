@@ -89,7 +89,8 @@ jdk21-graalvm-bin
 jdk25-graalvm-bin
 android-sdk-build-tools
 android-sdk-platform-tools
-
+android-ndk
+android-sdk
 ngrok
 
 # Jetbrains
@@ -163,6 +164,8 @@ intel-level-zero-raytracing-support
 
 # UU
 uuyc-wine
+# 原生 Linux 客户端：从 stevessr/openuuyc-linux 的 linux-port 分支构建
+openuuyc-git
 
 
 # rime

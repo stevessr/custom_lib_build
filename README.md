@@ -65,10 +65,11 @@ custom-pkgs/
 ├── claude-desktop-http-patch/  # 官方 Claude Desktop .deb + 允许任意 http:// 推理端点补丁（stevessr/claude-app-patch 方案 2）
 ├── claude-desktop-full-patch/  # 官方 Claude Desktop .deb + 功能解锁补丁（stevessr/claude-app-patch 方案 3，实验性）
 ├── bongocat-bin/PKGBUILD       # BongoCat 桌宠（从 vladelaina/BongoCat Release 获取官方预构建 tar.gz）
+├── openuuyc-git/PKGBUILD      # OpenUUYC 原生 Linux 客户端（stevessr/openuuyc-linux，源码构建）
 └── cscience-bin/PKGBUILD       # Claude Science BYOK（从 Haleclipse/cscience Release 获取，需 bun）
 ```
 
-自定义包使用 `pkgver()` 动态获取最新版本号，从上游 GitHub Release 直接下载原生 tarball 构建，无需 npm。
+二进制自定义包可用 `pkgver()` 动态获取上游 Release 版本；`-git` 自定义包从指定分支源码构建，按 commit 判断是否需要更新。
 
 ### 3. 安装包
 
@@ -143,12 +144,48 @@ gh release download latest --repo stevssr/custom_lib_build --pattern '包名-*.p
 sudo pacman -U 包名-*.pkg.tar.zst
 ```
 
+### OpenUUYC 原生 Linux 客户端
+
+`openuuyc-git` 跟踪 [`stevessr/openuuyc-linux`](https://github.com/stevessr/openuuyc-linux) 的 `linux-port` 分支，面向 x86_64。它与现有 `uuyc-wine` 是不同的安装选项，不依赖 Wine，也不依赖尚未发布的 Release 资产。
+
+仓库首次构建发布后安装、启动：
+
+```bash
+sudo pacman -Syu openuuyc-git
+OpenUUYC
+```
+
+发布前也可在本仓库直接构建安装：
+
+```bash
+cd custom-pkgs/openuuyc-git
+makepkg -si
+```
+
+包内包含桌面入口、图标、uinput 规则、systemd 用户单元及可选的 `openuuyc-vkms` 虚拟显示器辅助程序。安装不会自动开启远程控制、登录自启或 root 服务；登录自启在应用设置中开启。登录需要 Secret Service 密钥环。
+
+Wayland 被控需要配置 uinput 权限；GNOME/KDE 等桌面还需要对应的屏幕共享门户。虚拟显示器仅在满足上游条件（当前为 niri、Linux ≥ 6.19、`CONFIG_DRM_VKMS`）时可用，按需手动启用：
+
+```bash
+sudo udevadm control --reload-rules
+sudo modprobe uinput
+# 需要每次启动加载时：
+echo uinput | sudo tee /etc/modules-load.d/uinput.conf
+
+# 仅需虚拟显示器时：
+sudo systemctl enable --now openuuyc-vkms.socket
+```
+
+默认每日检查分支更新；也支持可选的 GitHub webhook：在现有 Cloudflare Worker 配置签名密钥和目标仓库令牌后，源仓库的 `linux-port` push 触发 `openuuyc-update` dispatch。配置步骤见 [Deploy.md 的 OpenUUYC webhook 章节](Deploy.md#openuuyc-webhook可选)。未配置 webhook 不影响每日构建。
+
+Webhook 走 `Build AUR Repository` 的完整编排，保留所有包的数据库条目，不用单包数据库覆盖整个仓库。源码 commit 未变化的 `-git` 包复用上次产物；webhook payload 不会改变构建 checkout 或执行命令。
+
 ## `-git` 包跳过逻辑
 
 对于名称以 `-git` 结尾的包，构建脚本会：
 
-1. 克隆 AUR 仓库（仅 PKGBUILD），提取其中的 `git+` 源码 URL
-2. 通过 `git ls-remote` 查询上游仓库当前 HEAD 的 commit hash
+1. 优先读取 `custom-pkgs/<包名>/PKGBUILD`；没有自定义配方时读取 AUR PKGBUILD，提取 `git+` 源码 URL
+2. 通过 `git ls-remote` 查询指定分支（未指定时为 HEAD）的 commit hash
 3. 从 `latest` Release 下载 `version-<包名>.txt` 和 `manifest-<包名>.txt`
 4. 如果相同 → **跳过构建**，从 `latest` 复用清单中的旧包
 5. 如果不同 → 正常构建并上传新的 Actions artifact
@@ -254,6 +291,7 @@ arch_lib/
 │   ├── cherry-studio-bin/PKGBUILD  # 从 CherryHQ/cherry-studio Release 下载 Linux RPM 并解包
 │   ├── claude-code/PKGBUILD  # 从 CometixSpace/claude-code Release 下载
 │   ├── bongocat-bin/PKGBUILD # 从 vladelaina/BongoCat Release 下载（官方预构建）
+│   ├── openuuyc-git/PKGBUILD # 从 stevessr/openuuyc-linux 的 linux-port 分支构建
 │   └── cscience-bin/PKGBUILD # 从 Haleclipse/cscience Release 下载（原生 Bun）
 ├── packages.txt              # 要构建的包列表（AUR 或 custom-pkgs）
 ├── arch_lib.pub.asc          # 签名公钥占位

@@ -16,3 +16,8 @@ run_worker_first = true
 [vars]
 S3_REGION = "us-east-1"
 BASE_PATH = ""
+
+# 可选 OpenUUYC webhook（两个 Secret 未配置时关闭，见 Deploy.md）。
+GITHUB_DISPATCH_REPOSITORY = "stevessr/custom_lib_build"
+OPENUUYC_UPSTREAM_REPOSITORY = "stevessr/openuuyc-linux"
+OPENUUYC_UPSTREAM_BRANCH = "linux-port"
