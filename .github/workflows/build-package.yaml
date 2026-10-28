@@ -153,6 +153,9 @@ jobs:
           # $GITHUB_WORKSPACE, not the host-side github.workspace expression.
           export REPO_DIR="$GITHUB_WORKSPACE/repos/x86_64"
           export LAST_VERSIONS_FILE="$GITHUB_WORKSPACE/last-versions.txt"
+          # check-version has already chosen the build path; stale latest
+          # metadata must not cause build-package.sh to skip the rebuild.
+          export FORCE_BUILD=1
           # -E: keep env (including the paths above), -H: HOME=/home/builder
           sudo -EHu builder bash scripts/build-package.sh "${{ inputs.package }}"
 

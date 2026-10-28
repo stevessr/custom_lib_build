@@ -1,0 +1,34 @@
+name: Test Release Asset Reuse
+
+on:
+  pull_request:
+    paths:
+      - scripts/check-version.sh
+      - scripts/build-package.sh
+      - scripts/tests/test-check-version-assets.sh
+      - .github/workflows/build-package.yaml
+      - .github/workflows/test-release-asset-reuse.yaml
+  push:
+    branches: [master]
+    paths:
+      - scripts/check-version.sh
+      - scripts/build-package.sh
+      - scripts/tests/test-check-version-assets.sh
+      - .github/workflows/build-package.yaml
+      - .github/workflows/test-release-asset-reuse.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell syntax
+        run: |
+          bash -n scripts/check-version.sh
+          bash -n scripts/build-package.sh
+          bash -n scripts/tests/test-check-version-assets.sh
+      - name: Test missing and present release assets
+        run: bash scripts/tests/test-check-version-assets.sh
