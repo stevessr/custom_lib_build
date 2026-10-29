@@ -190,7 +190,7 @@ if [ -f "$LAST_VERSIONS_FILE" ]; then
     last_ver=$(grep "^${PKG}=" "$LAST_VERSIONS_FILE" 2>/dev/null | cut -d= -f2- || true)
 fi
 
-if [ -n "$last_ver" ] && [ "$current_ver" = "$last_ver" ]; then
+if [ "${FORCE_BUILD:-0}" != "1" ] && [ -n "$last_ver" ] && [ "$current_ver" = "$last_ver" ]; then
     echo -e "${YELLOW}  ⏭  Version unchanged ($current_ver) — skipping build${NC}"
     echo "version=$current_ver" > "$PKG_OUTPUT"
     echo "skipped=true" >> "$PKG_OUTPUT"

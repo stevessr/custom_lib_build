@@ -10,8 +10,8 @@
 #   - 普通 AUR 包                 → PKGBUILD 静态 pkgver
 #
 # 判定规则（普通包，自愈式）：
-#   1. version-<pkg>.txt == 当前 pkgver → 无需构建（快路径）
-#   2. 不一致时 HEAD 探测 latest 上是否已存在
+#   1. version-<pkg>.txt == 当前 pkgver 且包资产完整 → 无需构建
+#   2. 无论元数据是否一致，HEAD 探测 latest 上是否已存在
 #      <pkg>-<epoch:>pkgver-pkgrel-<arch>.pkg.tar.zst（epoch 冒号与
 #      资产存储名一致地转成 '_'）：存在 → 复用（publish 中断留下的
 #      “包文件已传、version 元数据未更新”中间态无需白白重建一次）；
@@ -130,35 +130,66 @@ if [ -n "${GH_TOKEN:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
         2>/dev/null | tr -d '[:space:]' || true)
 fi
 
-if [ -n "$prev" ] && [ "$ver" = "$prev" ]; then
-    write_result false "$ver"
-    exit 0
-fi
+# A version marker is not evidence that the package asset survived publishing.
+# Interrupted uploads can leave a version-*.txt and even a .sig without the
+# matching .pkg.tar.zst. Check the actual public asset before deciding to reuse.
+# Do not forward GH_TOKEN to GitHub's signed redirect target.
+release_base="https://github.com/$GITHUB_REPOSITORY/releases/download/latest"
+asset_exists() {
+    local filename="$1" encoded code
+    encoded=$(jq -rn --arg value "$filename" '$value | @uri')
+    code=$(curl -sSIL --max-time 20 --retry 2 --retry-all-errors --retry-delay 2 \
+        -o /dev/null -w '%{http_code}' "$release_base/$encoded" 2>/dev/null || true)
+    [ "$code" = "200" ]
+}
 
 if [[ "$PKG" == *-git ]]; then
-    # -git：version 文件不一致（或缺失）→ 重建
+    # VCS versions are commit hashes, not the version embedded in the package
+    # filename. Verify every package in the published manifest before reuse.
+    if [ -n "$prev" ] && [ "$ver" = "$prev" ]; then
+        published_manifest=$(curl -fsSL --max-time 20 --retry 2 \
+            "$release_base/manifest-$PKG.txt" 2>/dev/null || true)
+        found=0
+        all_present=true
+        while IFS= read -r filename; do
+            [[ "$filename" =~ ^[a-zA-Z0-9._:+-]+\.pkg\.tar\.zst$ ]] || continue
+            found=1
+            if ! asset_exists "$filename"; then
+                echo "  ⚠ latest missing $filename — rebuilding $PKG"
+                all_present=false
+                break
+            fi
+        done <<< "$published_manifest"
+        if [ "$found" -eq 1 ] && [ "$all_present" = true ]; then
+            write_result false "$ver"
+            exit 0
+        fi
+    fi
     write_result true "$ver"
     exit 0
 fi
 
-# 普通包：version 文件不一致时，HEAD 探测 latest 是否已存在当前
-# pkgver-pkgrel 的包资产。publish 中断会留下“包文件已传、元数据未更”
-# 的中间态；资产已在就直接复用（否则版本没变也每天重建一次），
-# reuse job 随后会把 version 文件刷新为当前值。
-filename="$PKG-${epoch:+$epoch:}$ver-$rel-$arch.pkg.tar.zst"
-filename="${filename//:/_}"   # epoch 冒号与资产存储名一致（上传前已 sanitize）
-enc=$(jq -rn --arg v "$filename" '$v|@uri')
-code=""
-if [ -n "${GH_TOKEN:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
-    code=$(curl -sIL --max-time 20 --retry 2 --retry-all-errors --retry-delay 2 \
-        -H "Authorization: Bearer $GH_TOKEN" \
-        "https://github.com/$GITHUB_REPOSITORY/releases/download/latest/$enc" \
-        -o /dev/null -w '%{http_code}' 2>/dev/null || true)
+if [ "$ver" = "unknown" ]; then
+    write_result true "$ver"
+    exit 0
 fi
 
-if [ "$code" = "200" ]; then
-    echo "  asset already on latest ($filename) — reuse despite stale version file"
-    write_result false "$ver"
-else
-    write_result true "$ver"
+# Regular AUR packages: verify every output of a split PKGBUILD. An asset may
+# already exist even when the version file is stale (interrupted publish).
+# Conversely, an unchanged version must rebuild if even one binary is missing.
+IFS=',' read -r -a package_names <<< "${pkglist:-$PKG}"
+for name in "${package_names[@]}"; do
+    [ -n "$name" ] || continue
+    filename="$name-${epoch:+$epoch:}$ver-$rel-$arch.pkg.tar.zst"
+    filename="${filename//:/_}"
+    if ! asset_exists "$filename"; then
+        echo "  ⚠ latest missing $filename (version marker: ${prev:-none}) — rebuilding $PKG"
+        write_result true "$ver"
+        exit 0
+    fi
+done
+
+if [ "$ver" != "$prev" ]; then
+    echo "  assets already in latest, but version metadata stale — reusing and repairing"
 fi
+write_result false "$ver"
