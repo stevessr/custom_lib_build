@@ -186,3 +186,7 @@ wivrn-server
 wivrn-client
 alvr-launcher-bin
 alvr
+
+
+# grep
+graphify
