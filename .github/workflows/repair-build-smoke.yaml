@@ -1,0 +1,31 @@
+# Real makepkg integration tests: no publication, no release mutation.
+name: Build repair candidates (non-publishing)
+
+on:
+  pull_request:
+    paths:
+      - 'custom-pkgs/**'
+      - 'scripts/**'
+      - 'Dockerfile'
+      - 'packages.txt'
+      - '.github/workflows/repair-build-smoke.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        package:
+          - python-vcstool
+          - ocrmypdf
+          - wivrn-dashboard
+          - alvr
+    uses: ./.github/workflows/build-package.yaml
+    with:
+      package: ${{ matrix.package }}
