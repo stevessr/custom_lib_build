@@ -31,6 +31,13 @@ jobs:
           - wivrn-dashboard
           - alvr
           - graphify
+          - claude-desktop-http-patch
+          - claude-desktop-full-patch
+          - ros2-kilted
+          - stirling-pdf-bin
+          - openuuyc-git
+          - wayvr
+          - xrizer
     uses: ./.github/workflows/build-package.yaml
     with:
       package: ${{ matrix.package }}

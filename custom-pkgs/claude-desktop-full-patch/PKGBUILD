@@ -184,9 +184,37 @@ NODE
     printf '1\n' > "$srcdir/.repack-ion-dist"
   fi
 
+  # Claude's Linux resources may place the SPA/i18n in resources/locales/.
+  # Expose that *same* tree through temporary root paths for the existing
+  # locale and model patcher; preserve the upstream runtime directory.
+  local ion_layout=root
+  if [[ ! -d "$ion_resources/ion-dist/assets/v1" &&
+        -d "$ion_resources/locales/ion-dist/assets/v1" &&
+        -f "$ion_resources/locales/en-US.json" ]]; then
+    if [[ -e "$ion_resources/ion-dist" || -L "$ion_resources/ion-dist" ]]; then
+      echo "Ambiguous Claude resources layout; not replacing ion-dist" >&2
+      return 1
+    fi
+    ln -s locales/ion-dist "$ion_resources/ion-dist"
+    if [[ ! -e "$ion_resources/en-US.json" && ! -L "$ion_resources/en-US.json" ]]; then
+      ln -s locales/en-US.json "$ion_resources/en-US.json"
+    fi
+    ion_layout=locales
+  fi
+  if [[ ! -d "$ion_resources/ion-dist/assets/v1" || ! -f "$ion_resources/en-US.json" ]]; then
+    echo "Claude Desktop resources layout differs from supported root/locales paths:" >&2
+    find "$ion_resources" -maxdepth 6 \( -name 'ion-dist*' -o -name 'en-US.json' -o -name '*.asar' \) -print | head -80 >&2
+    return 1
+  fi
+
   # ── 3. 安装简体中文界面资源 ────────────────────────────────────────
   node claude-app-patch/setup.js zh-resources --lang "$_lang" \
     --resources "$srcdir/deb/usr/lib/claude-desktop/resources"
+  if [[ "$ion_layout" == locales ]]; then
+    # zh-resources writes root zh-CN.json; actual Electron locale lookup in
+    # this layout reads resources/locales/zh-CN.json.
+    install -Dm644 "$ion_resources/$_lang.json" "$ion_resources/locales/$_lang.json"
+  fi
 
   # ── 4. 打补丁（含模型选择器与中文界面 hook） ─────────────────────
   rm -rf patched
