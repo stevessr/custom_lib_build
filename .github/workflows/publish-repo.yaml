@@ -131,8 +131,8 @@ jobs:
           echo "--- Collected metadata ---"
           ls -lh release-metadata/
 
-      # Preserve existing db entries (and files database) for targeted builds.
-      # A partial update without both existing databases must fail closed.
+      # Partial publication must start from the existing complete database.
+      # Fail without it rather than replacing hundreds of package entries.
       - name: Restore existing repository databases (partial update)
         if: ${{ inputs.partial-update }}
         run: |
@@ -144,7 +144,15 @@ jobs:
               "$base_url/$db" -o "$db"
             bsdtar -tf "$db" >/dev/null
           done
-          count=$(bsdtar -tf arch_lib.db.tar.gz | grep -c '/desc
+          count=$(bsdtar -tf arch_lib.db.tar.gz | grep -c '/desc$' || true)
+          if [ "$count" -lt 3 ]; then
+            echo "::error::Existing repository db missing or too small for partial update"
+            exit 1
+          fi
+          printf '%s\n' "$count" > "$GITHUB_WORKSPACE/.previous_repo_count"
+          echo "Partial update preserving $count package entries"
+
+      # ── Sanitize epoch colons & sign ───────────────────────────────
       - name: Sanitize and sign packages
         run: |
           cd repos/x86_64
@@ -177,8 +185,7 @@ jobs:
             exit 1
           fi
 
-          # Full builds start with empty databases; partial builds retain the
-          # downloaded databases to replace just the provided package entries.
+          # Full publishes start clean; partial publishes edit the restored db.
           if [ "${{ inputs.partial-update }}" != "true" ]; then
             rm -f arch_lib.db.tar.gz arch_lib.files.tar.gz
           fi
@@ -197,195 +204,12 @@ jobs:
 
           if [ "${{ inputs.partial-update }}" = "true" ]; then
             before=$(cat "$GITHUB_WORKSPACE/.previous_repo_count")
-            after=$(bsdtar -tf arch_lib.db.tar.gz | grep -c '/desc
-          # pacman requests both <repo>.db and <repo>.db.tar.gz
-          rm -f arch_lib.db arch_lib.files
-          cp arch_lib.db.tar.gz arch_lib.db
-          cp arch_lib.files.tar.gz arch_lib.files
-
-          if [ -n "${KEY_ID:-}" ]; then
-            cp arch_lib.db.tar.gz.sig arch_lib.db.sig 2>/dev/null || true
-            cp arch_lib.files.tar.gz.sig arch_lib.files.sig 2>/dev/null || true
-          fi
-          ls -lh
-
-      # ── Incremental upload to `latest` Release ────────────────────
-      # publish-release.sh: 对比 version 元数据，只上传变化的包文件、
-      # 删除旧版本资产、最后重建 db；全 skip 时完全不触碰 release。
-      # 不再删除 release/tag（无 404 窗口期），同名资产先删再传（幂等）。
-      - name: Update latest release (incremental)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          bash scripts/publish-release.sh \
-            "$GITHUB_WORKSPACE/repos/x86_64" \
-            "$GITHUB_WORKSPACE/release-metadata" \
-            "$GITHUB_WORKSPACE/arch_lib.pub.asc" \
-            "$GH_TOKEN"
- || true)
-          if [ "$count" -lt 3 ]; then
-            echo "::error::Refusing partial update: existing repository db is missing or incomplete"
-            exit 1
-          fi
-          printf '%s\n' "$count" > "$GITHUB_WORKSPACE/.previous_repo_count"
-          echo "Preserving $count package entries during partial update"
-
-      # ── Sanitize epoch colons & sign ───────────────────────────────
-      - name: Sanitize and sign packages
-        run: |
-          cd repos/x86_64
-
-          # Epoch colons (e.g. kiro-ide-2:1.0.242) break GitHub uploads
-          for f in *:*.pkg.tar.zst; do
-            [ -f "$f" ] || continue
-            dest=$(basename "$f" | tr ':' '_')
-            mv -v "$f" "$dest"
-          done
-
-          # Sign each package if key configured
-          if [ -n "${KEY_ID:-}" ]; then
-            for f in *.pkg.tar.zst; do
-              [ -f "$f" ] || continue
-              echo "Signing: $f"
-              gpg --batch --yes --detach-sign --local-user "$KEY_ID" "$f"
-            done
-          fi
-
-      # ── Create repository database ─────────────────────────────────
-      - name: Create repository database
-        run: |
-          cd repos/x86_64
-
-          PKG_COUNT=$(ls -1 *.pkg.tar.zst 2>/dev/null | wc -l || true)
-          echo "Packages in repo: $PKG_COUNT"
-          if [ "$PKG_COUNT" -eq 0 ]; then
-            echo "No packages — aborting"
-            exit 1
-          fi
-
-          rm -f arch_lib.db.tar.gz arch_lib.db arch_lib.files.tar.gz arch_lib.files
-
-          # Only pass .zst files to repo-add: the *.pkg.tar.* glob would also
-          # match the .sig files generated above, and repo-add would try to
-          # parse each signature as a package (bsdtar: Unrecognized archive
-          # format). repo-add picks up sibling .sig files automatically.
-          if [ -n "${KEY_ID:-}" ]; then
-            echo "Signing repository database with $KEY_ID"
-            GPGKEY="$KEY_ID" repo-add --remove --new --sign arch_lib.db.tar.gz ./*.pkg.tar.zst
-          else
-            repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.zst
-          fi
-
-          # Real copies (not symlinks) — GitHub Release assets are flat,
-          # pacman requests both <repo>.db and <repo>.db.tar.gz
-          rm -f arch_lib.db arch_lib.files
-          cp arch_lib.db.tar.gz arch_lib.db
-          cp arch_lib.files.tar.gz arch_lib.files
-
-          if [ -n "${KEY_ID:-}" ]; then
-            cp arch_lib.db.tar.gz.sig arch_lib.db.sig 2>/dev/null || true
-            cp arch_lib.files.tar.gz.sig arch_lib.files.sig 2>/dev/null || true
-          fi
-          ls -lh
-
-      # ── Incremental upload to `latest` Release ────────────────────
-      # publish-release.sh: 对比 version 元数据，只上传变化的包文件、
-      # 删除旧版本资产、最后重建 db；全 skip 时完全不触碰 release。
-      # 不再删除 release/tag（无 404 窗口期），同名资产先删再传（幂等）。
-      - name: Update latest release (incremental)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          bash scripts/publish-release.sh \
-            "$GITHUB_WORKSPACE/repos/x86_64" \
-            "$GITHUB_WORKSPACE/release-metadata" \
-            "$GITHUB_WORKSPACE/arch_lib.pub.asc" \
-            "$GH_TOKEN"
- || true)
+            after=$(bsdtar -tf arch_lib.db.tar.gz | grep -c '/desc$' || true)
             if [ "$after" -lt "$before" ]; then
               echo "::error::Partial update dropped repository entries: before=$before after=$after"
               exit 1
             fi
-            echo "Partial update: preserved $before existing entries, now $after"
-          fi
-
-          # Real copies (not symlinks) — GitHub Release assets are flat,
-          # pacman requests both <repo>.db and <repo>.db.tar.gz
-          rm -f arch_lib.db arch_lib.files
-          cp arch_lib.db.tar.gz arch_lib.db
-          cp arch_lib.files.tar.gz arch_lib.files
-
-          if [ -n "${KEY_ID:-}" ]; then
-            cp arch_lib.db.tar.gz.sig arch_lib.db.sig 2>/dev/null || true
-            cp arch_lib.files.tar.gz.sig arch_lib.files.sig 2>/dev/null || true
-          fi
-          ls -lh
-
-      # ── Incremental upload to `latest` Release ────────────────────
-      # publish-release.sh: 对比 version 元数据，只上传变化的包文件、
-      # 删除旧版本资产、最后重建 db；全 skip 时完全不触碰 release。
-      # 不再删除 release/tag（无 404 窗口期），同名资产先删再传（幂等）。
-      - name: Update latest release (incremental)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          bash scripts/publish-release.sh \
-            "$GITHUB_WORKSPACE/repos/x86_64" \
-            "$GITHUB_WORKSPACE/release-metadata" \
-            "$GITHUB_WORKSPACE/arch_lib.pub.asc" \
-            "$GH_TOKEN"
- || true)
-          if [ "$count" -lt 3 ]; then
-            echo "::error::Refusing partial update: existing repository db is missing or incomplete"
-            exit 1
-          fi
-          printf '%s\n' "$count" > "$GITHUB_WORKSPACE/.previous_repo_count"
-          echo "Preserving $count package entries during partial update"
-
-      # ── Sanitize epoch colons & sign ───────────────────────────────
-      - name: Sanitize and sign packages
-        run: |
-          cd repos/x86_64
-
-          # Epoch colons (e.g. kiro-ide-2:1.0.242) break GitHub uploads
-          for f in *:*.pkg.tar.zst; do
-            [ -f "$f" ] || continue
-            dest=$(basename "$f" | tr ':' '_')
-            mv -v "$f" "$dest"
-          done
-
-          # Sign each package if key configured
-          if [ -n "${KEY_ID:-}" ]; then
-            for f in *.pkg.tar.zst; do
-              [ -f "$f" ] || continue
-              echo "Signing: $f"
-              gpg --batch --yes --detach-sign --local-user "$KEY_ID" "$f"
-            done
-          fi
-
-      # ── Create repository database ─────────────────────────────────
-      - name: Create repository database
-        run: |
-          cd repos/x86_64
-
-          PKG_COUNT=$(ls -1 *.pkg.tar.zst 2>/dev/null | wc -l || true)
-          echo "Packages in repo: $PKG_COUNT"
-          if [ "$PKG_COUNT" -eq 0 ]; then
-            echo "No packages — aborting"
-            exit 1
-          fi
-
-          rm -f arch_lib.db.tar.gz arch_lib.db arch_lib.files.tar.gz arch_lib.files
-
-          # Only pass .zst files to repo-add: the *.pkg.tar.* glob would also
-          # match the .sig files generated above, and repo-add would try to
-          # parse each signature as a package (bsdtar: Unrecognized archive
-          # format). repo-add picks up sibling .sig files automatically.
-          if [ -n "${KEY_ID:-}" ]; then
-            echo "Signing repository database with $KEY_ID"
-            GPGKEY="$KEY_ID" repo-add --remove --new --sign arch_lib.db.tar.gz ./*.pkg.tar.zst
-          else
-            repo-add --remove --new arch_lib.db.tar.gz ./*.pkg.tar.zst
+            echo "Partial update kept $before existing entries; new count $after"
           fi
 
           # Real copies (not symlinks) — GitHub Release assets are flat,
