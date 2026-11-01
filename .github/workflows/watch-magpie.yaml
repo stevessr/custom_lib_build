@@ -71,8 +71,8 @@ jobs:
           version="${upstream#v}"
           echo "Upstream tag: $upstream → version: $version"
 
-          # magpie-bin 与 magpie-cli-bin 共用同一上游版本；以 magpie-bin
-          # 的已发布 version 文件为唯一事实来源。
+          # magpie-bin 与 magpie-cli-bin 共用上游版本，但需独立核对
+          # 两个已发布的 version 文件，防止其中一个包落后。
           published="$(curl -fsSL --max-time 30 --retry 5 --retry-all-errors \
             --retry-delay 2 \
             "https://github.com/${GITHUB_REPOSITORY}/releases/download/latest/version-magpie-bin.txt" \
