@@ -43,6 +43,11 @@ jobs:
 
   apply:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.apply && github.ref == 'refs/heads/master' }}
+    # Share the publication writer lock; repair must not race a package build
+    # or manual republish while replacing the signed database assets.
+    concurrency:
+      group: ${{ github.repository }}-release-asset-writer
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 75
     permissions:
