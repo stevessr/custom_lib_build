@@ -35,6 +35,10 @@ jobs:
         run: |
           set -euo pipefail
           grep -qxF 'python-fpdf2' packages.txt
+          grep -qxF 'python-tree-sitter-objc' packages.txt
+          grep -qxF 'python-tree-sitter-groovy' packages.txt
+          test -f custom-pkgs/python-tree-sitter-objc/PKGBUILD
+          test -f scripts/pre-build/graphify.sh
           ! grep -qxF 'wivrn-client' packages.txt
           test -f custom-pkgs/openuuyc-git/PKGBUILD
           test -f custom-pkgs/openuuyc-git/openuuyc-git.install
