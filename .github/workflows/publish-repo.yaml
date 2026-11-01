@@ -37,6 +37,12 @@ permissions:
 
 jobs:
   publish:
+    # Both scheduled/manual repo publication and index repair write the same
+    # latest Release assets. They must not run concurrently. Queue, never
+    # cancel an active writer mid-upload (a Release update is not atomic).
+    concurrency:
+      group: ${{ github.repository }}-release-asset-writer
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     container:
       # 每日预构建镜像（build-arch-builder-image.yaml 维护），已含
