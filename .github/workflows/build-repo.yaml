@@ -14,11 +14,12 @@
 
 name: Build AUR Repository
 
-# A scheduled run and the push triggered by update-daily must not publish
-# concurrently; an older run finishing last could otherwise overwrite latest.
+# The repository orchestrator serializes all complete build/publish runs.
+# Never cancel one in progress: it could already be uploading to latest.
+# Pending runs collapse to the newest workflow event on bursty pushes.
 concurrency:
   group: arch-lib-build-repository
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 on:
   schedule:
