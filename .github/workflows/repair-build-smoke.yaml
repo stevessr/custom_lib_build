@@ -26,16 +26,18 @@ jobs:
       max-parallel: 3
       matrix:
         package:
+          # Prioritize unresolved packages to expose diagnostic logs
+          # before rerunning long, already-verified jobs.
+          - claude-desktop-http-patch
+          - claude-desktop-full-patch
+          - openuuyc-git
+          - ros2-kilted
+          - graphify
           - python-vcstool
           - ocrmypdf
           - wivrn-dashboard
           - alvr
-          - graphify
-          - claude-desktop-http-patch
-          - claude-desktop-full-patch
-          - ros2-kilted
           - stirling-pdf-bin
-          - openuuyc-git
           - wayvr
           - xrizer
     uses: ./.github/workflows/build-package.yaml
