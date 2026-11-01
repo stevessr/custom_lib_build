@@ -164,6 +164,19 @@ NODE
     return 1
   }
 
+  # Claude Desktop 4.29+ can ship ion-dist as an Electron ASAR instead of
+  # a directory. Work on an extracted copy and repack only after BOTH locale
+  # and renderer-model patch checks succeed. Never skip a missing anchor.
+  local ion_resources="$srcdir/deb/usr/lib/claude-desktop/resources"
+  if [[ -f "$ion_resources/ion-dist.asar" && ! -d "$ion_resources/ion-dist" ]]; then
+    ( cd "$srcdir/claude-app-patch" && node - "$ion_resources/ion-dist.asar" "$ion_resources/ion-dist" <<'NODE'
+const asar = require('@electron/asar');
+asar.extractAll(process.argv[2], process.argv[3]);
+NODE
+    ) || return 1
+    printf '1\n' > "$srcdir/.repack-ion-dist"
+  fi
+
   # ── 3. 安装简体中文界面资源 ────────────────────────────────────────
   node claude-app-patch/setup.js zh-resources --lang "$_lang" \
     --resources "$srcdir/deb/usr/lib/claude-desktop/resources"
@@ -198,6 +211,29 @@ NODE
     echo "required renderer model patch did not pass for Claude Desktop $ver"
     return 1
   }
+
+  if [[ -f "$srcdir/.repack-ion-dist" ]]; then
+    # Repack the modified SPA into the exact upstream location; do not ship
+    # duplicate unpacked assets that Electron will never load.
+    ( cd "$srcdir/claude-app-patch" && node - "$ion_resources" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const asar = require('@electron/asar');
+const root = process.argv[2];
+const dir = path.join(root, 'ion-dist');
+const archive = path.join(root, 'ion-dist.asar');
+const tmp = archive + '.patched';
+(async () => {
+  await asar.createPackage(dir, tmp);
+  if (!asar.extractFile(tmp, 'index.html').length) {
+    throw new Error('Repacked ion-dist.asar missing index.html');
+  }
+  fs.renameSync(tmp, archive);
+  fs.rmSync(dir, { recursive: true, force: true });
+})().catch(err => { console.error(err); process.exitCode = 1; });
+NODE
+    ) || return 1
+  fi
 
   patched_version="$(read_asar_version "$srcdir/patched/app.asar")"
   [ "$patched_version" = "$ver" ] || {

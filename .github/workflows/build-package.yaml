@@ -97,8 +97,8 @@ jobs:
           # arch-builder 镜像每日维护，这里只做增量升级：
           # 未变化的包命中缓存/镜像层，零或少量下载
           # Enable multilib even when using a previously built GHCR image.
-          sed -i -e 's/^#\\[multilib\\]$/[multilib]/' \
-                 -e '/^\\[multilib\\]$/{n;s/^#Include /Include /;}' /etc/pacman.conf
+          sed -i -e 's/^#\[multilib\]$/[multilib]/' \
+                 -e '/^\[multilib\]$/{n;s/^#Include /Include /;}' /etc/pacman.conf
           pacman -Syu --noconfirm
 
       - name: Setup builder user
