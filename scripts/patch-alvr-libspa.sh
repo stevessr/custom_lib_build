@@ -49,6 +49,8 @@ printf '\n[patch.crates-io]\nlibspa-sys = { path = "../libspa-sys-0.8.0" }\n' >>
 (
     cd "$alvr_dir"
     cargo update -p libspa-sys@0.8.0
+    # ALVR invokes cargo with --frozen: prefetch newly selected crates now.
+    cargo fetch --locked
     cargo metadata --locked --format-version 1 --no-deps >/dev/null
 )
 echo "[ALVR] Patched libspa-sys 0.8.0 to bindgen 0.72.1 (PipeWire enabled)"
