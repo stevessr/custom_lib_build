@@ -73,3 +73,25 @@ if ! vcs help import >/dev/null 2>&1; then
     exit 1
 fi
 echo "  [hook] ✓ vcstool command dispatcher works"
+
+# Kilted Fast-DDS v3.2.3 trips GCC 16's -Werror=unused-but-set-variable
+# (CacheChange.hpp:266). Preserve every other -Werror diagnostic.
+recipe="${1:?AUR PKGBUILD directory required}/PKGBUILD"
+test -f "$recipe"
+if ! grep -q '^# BEGIN arch_lib Fast-DDS GCC compatibility$' "$recipe"; then
+    cat >> "$recipe" <<'PKGBUILD_PATCH'
+
+# BEGIN arch_lib Fast-DDS GCC compatibility
+if ! declare -f build >/dev/null; then
+    echo 'ros2-kilted PKGBUILD lacks build()' >&2
+    return 1
+fi
+eval "$(declare -f build | sed '1s/^build[[:space:]]*()/_arch_lib_original_build ()/')"
+build() {
+    export CXXFLAGS="${CXXFLAGS:-} -Wno-error=unused-but-set-variable"
+    _arch_lib_original_build
+}
+# END arch_lib Fast-DDS GCC compatibility
+PKGBUILD_PATCH
+fi
+bash -n "$recipe"

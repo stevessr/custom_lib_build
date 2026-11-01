@@ -204,6 +204,16 @@ NODE
   if [[ ! -d "$ion_resources/ion-dist/assets/v1" || ! -f "$ion_resources/en-US.json" ]]; then
     echo "Claude Desktop resources layout differs from supported root/locales paths:" >&2
     find "$ion_resources" -maxdepth 6 \( -name 'ion-dist*' -o -name 'en-US.json' -o -name '*.asar' \) -print | head -80 >&2
+    echo "== Claude resources directory layout ==" >&2
+    find "$ion_resources" -maxdepth 4 -mindepth 1 -type d -not -path '*/node_modules/*' -print | head -110 >&2 || true
+    echo "== ion-dist JS/JSON/HTML files ==" >&2
+    find "$ion_resources/ion-dist" -maxdepth 5 -type f \( -name '*.js' -o -name '*.json' -o -name '*.html' \) -print | head -90 >&2 || true
+    echo "== app.asar locale/resource entries ==" >&2
+    ( cd "$srcdir/claude-app-patch" && node - "$ion_resources/app.asar" <<'NODE'
+const asar = require('@electron/asar');
+for (const f of asar.listPackage(process.argv[2]).filter(x => /ion-dist|en-US\.json|locales|i18n|assets/.test(x)).slice(0, 110)) console.error(f);
+NODE
+    ) || true
     return 1
   fi
 
