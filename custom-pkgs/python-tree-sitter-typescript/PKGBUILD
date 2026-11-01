@@ -1,0 +1,73 @@
+# Source: https://github.com/Raudbjorn/SAUR/tree/main/python-tree-sitter-typescript
+# Maintainer: RubenKelevra <rubenkelevra@gmail.com>
+# Contributor: Rafael Dominiquini <rafaeldominiquini at gmail dot com>
+
+pkgname=python-tree-sitter-typescript
+_gitpkgname=tree-sitter-typescript
+pkgver=0.23.2
+pkgrel=3
+pkgdesc='Python Bindings for tree-sitter-typescript'
+arch=(
+      'x86_64'
+      'aarch64'
+)
+url='https://github.com/tree-sitter/tree-sitter-typescript'
+license=('MIT')
+depends=(
+  'python'
+  # The Python extension embeds its grammar and does not link against
+  # the native tree-sitter-typescript shared library (verified upstream).
+  # No external native runtime package is required.
+  # This grammar declares language ABI 14; python-tree-sitter below
+  # 0.23 cannot load it. The native tree-sitter library is not a
+  # runtime dependency: the extension module links none of it (ldd).
+  'python-tree-sitter>=0.23'
+)
+makedepends=(
+  'python-build'
+  'python-installer'
+  'python-setuptools'
+  'python-wheel'
+)
+checkdepends=(
+  'python-pytest'
+  'python-tree-sitter>=0.23'
+)
+
+source=(
+  "${_gitpkgname}-${pkgver}.tar.xz::${url}/releases/download/v${pkgver}/${_gitpkgname}.tar.xz"
+)
+
+b2sums=('8f62dd7c42c950a5ecb8ad75e96346ea2676b9046888e4acd823fa9b485f0b2ac292e9134afa6482ab316da68a14a7a588c3339aa3b1a676406a98c54b3147dd')
+
+build() {
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  local _python_version
+  local _checkdir="${srcdir}/${pkgname}-check"
+
+  _python_version=$(python --version)
+  _python_version=${_python_version#Python }
+  _python_version=${_python_version%.*}
+  if [[ ! ${_python_version} =~ ^[0-9]+\.[0-9]+$ ]]; then
+    printf 'Unable to determine Python major.minor version: %s\n' "${_python_version}" >&2
+    return 1
+  fi
+
+  # Load the grammar from a throwaway install root, never from an already
+  # installed copy on the host: this package's contract is that the extension
+  # it just built loads under the python-tree-sitter it declares.
+  rm -rf -- "${_checkdir}"
+  python -m installer --destdir="${_checkdir}" dist/*.whl
+
+  PYTHONPATH="${_checkdir}/usr/lib/python${_python_version}/site-packages" \
+    python -m pytest -q bindings/python/tests/test_binding.py
+}
+
+package() {
+  python -I -m installer --destdir="${pkgdir}" --compile-bytecode 0 --compile-bytecode 1 dist/*.whl
+  install -D -m 644 -t "${pkgdir}/usr/share/doc/${pkgname}" README.md
+  install -D -m 644 -t "${pkgdir}/usr/share/licenses/${pkgname}" LICENSE
+}
