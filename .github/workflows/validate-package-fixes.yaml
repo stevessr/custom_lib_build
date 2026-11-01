@@ -44,6 +44,8 @@ jobs:
           test -f custom-pkgs/openuuyc-git/openuuyc-git.install
           test -f scripts/pre-build/ocrmypdf.sh
           grep -q 'Validate package archives' .github/workflows/publish-repo.yaml
+          grep -q 'ASSET_DIGEST' scripts/publish-release.sh
+          grep -q 'asset differs from staged package' scripts/publish-release.sh
 
       - name: Verify Arch multilib configuration activation
         shell: bash
