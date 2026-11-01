@@ -24,6 +24,12 @@ on:
         type: boolean
         required: false
         default: false
+      # Explicit opt-out only for deliberately partial manual recovery.
+      # Ordinary scheduled/push builds must never bypass Claude artifact gate.
+      allow-missing-required-claude:
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -111,7 +117,7 @@ jobs:
           # Claude patch packages are release-critical. If a newer Desktop
           # build or patch fails, do not publish the other artifacts while
           # silently leaving an old Claude package looking current in latest.
-          if [ "${{ inputs.partial-update }}" != "true" ]; then
+          if [ "${{ inputs.allow-missing-required-claude }}" != "true" ]; then
             for required in claude-desktop-http-patch claude-desktop-full-patch; do
               if ! grep -Eq "^[[:space:]]*$required([[:space:]]|$)" packages.txt; then
                 continue
