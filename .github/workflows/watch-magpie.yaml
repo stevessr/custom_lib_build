@@ -39,10 +39,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  packages: read
 
 jobs:
   check:
+    # Polling needs no write privileges.
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -73,9 +77,13 @@ jobs:
             --retry-delay 2 \
             "https://github.com/${GITHUB_REPOSITORY}/releases/download/latest/version-magpie-bin.txt" \
             2>/dev/null | tr -d '[:space:]' || true)"
-          echo "Published version: ${published:-<none>}"
+          published_cli="$(curl -fsSL --max-time 30 --retry 5 --retry-all-errors \
+            --retry-delay 2 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/latest/version-magpie-cli-bin.txt" \
+            2>/dev/null | tr -d '[:space:]' || true)"
+          echo "Published versions: magpie-bin=${published:-<none>} magpie-cli-bin=${published_cli:-<none>}"
 
-          if [ "$version" = "$published" ]; then
+          if [ "$version" = "$published" ] && [ "$version" = "$published_cli" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "version=$version" >> "$GITHUB_OUTPUT"
             echo "Upstream version unchanged — no rebuild needed."
@@ -102,6 +110,9 @@ jobs:
 
   publish:
     needs: [check, build]
-    if: ${{ always() && !cancelled() && needs.check.outputs.changed == 'true' }}
+    # Never publish if either Magpie build failed.
+    if: ${{ !cancelled() && needs.check.outputs.changed == 'true' && needs.build.result == 'success' }}
     uses: ./.github/workflows/publish-repo.yaml
+    with:
+      partial-update: true
     secrets: inherit
