@@ -179,6 +179,7 @@ fcitx5-pinyin-custom-pinyin-dictionary
 # pdf
 python-pdf2image
 python-unoserver
+python-fpdf2
 ocrmypdf
 stirling-pdf-bin
 
@@ -190,10 +191,39 @@ wayvr
 xrizer
 wivrn-dashboard
 wivrn-server
-wivrn-client
+# WiVRn's headset client is an Android APK, not an x86_64 pacman package.
+# Only publish Linux server/dashboard; no fake AUR PKGBUILD for wivrn-client.
 alvr-launcher-bin
 alvr
 
+
+# Graphify: required runtime language packages also published for clients.
+python-tree-sitter
+python-tree-sitter-python
+python-tree-sitter-javascript
+python-tree-sitter-typescript
+python-tree-sitter-go
+python-tree-sitter-rust
+python-tree-sitter-java
+python-tree-sitter-groovy
+python-tree-sitter-c
+python-tree-sitter-cpp
+python-tree-sitter-ruby
+python-tree-sitter-c-sharp
+python-tree-sitter-kotlin
+python-tree-sitter-scala
+python-tree-sitter-php
+python-tree-sitter-swift
+python-tree-sitter-lua
+python-tree-sitter-zig
+python-tree-sitter-powershell
+python-tree-sitter-elixir
+python-tree-sitter-objc
+python-tree-sitter-julia
+python-tree-sitter-verilog
+python-tree-sitter-fortran
+python-tree-sitter-bash
+python-tree-sitter-json
 
 # grep
 graphify

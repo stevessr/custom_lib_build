@@ -24,6 +24,12 @@ on:
         type: boolean
         required: false
         default: false
+      # Explicit opt-out only for deliberately partial manual recovery.
+      # Ordinary scheduled/push builds must never bypass Claude artifact gate.
+      allow-missing-required-claude:
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -111,7 +117,7 @@ jobs:
           # Claude patch packages are release-critical. If a newer Desktop
           # build or patch fails, do not publish the other artifacts while
           # silently leaving an old Claude package looking current in latest.
-          if [ "${{ inputs.partial-update }}" != "true" ]; then
+          if [ "${{ inputs.allow-missing-required-claude }}" != "true" ]; then
             for required in claude-desktop-http-patch claude-desktop-full-patch; do
               if ! grep -Eq "^[[:space:]]*$required([[:space:]]|$)" packages.txt; then
                 continue
@@ -151,6 +157,28 @@ jobs:
           fi
           printf '%s\n' "$count" > "$GITHUB_WORKSPACE/.previous_repo_count"
           echo "Partial update preserving $count package entries"
+
+      # ── Validate archives before indexing or upload ─────────────────
+      - name: Validate package archives
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(repos/x86_64/*.pkg.tar.zst)
+          (( ${#packages[@]} > 0 )) || { echo "::error::No package archives"; exit 1; }
+          for file in "${packages[@]}"; do
+            # Qip checks metadata, but zstd -t checks the entire compressed stream.
+            if ! zstd -tq "$file"; then
+              echo "::error file=$file::Corrupt/truncated zstd package"
+              exit 1
+            fi
+            if ! info=$(pacman -Qip "$file"); then
+              echo "::error file=$file::Invalid pacman package"
+              exit 1
+            fi
+            printf '%s\n' "$info" | grep -Eq '^Name[[:space:]]*:' || exit 1
+            printf '%s\n' "$info" | grep -Eq '^Version[[:space:]]*:' || exit 1
+          done
+          echo "Validated ${#packages[@]} complete pacman archives"
 
       # ── Sanitize epoch colons & sign ───────────────────────────────
       - name: Sanitize and sign packages

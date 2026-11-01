@@ -1,0 +1,98 @@
+name: Audit published pacman repository
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/audit-repo.yaml'
+  workflow_dispatch:
+  schedule:
+    - cron: '20 3 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify latest Release package references
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          auth="Authorization: Bearer $GH_TOKEN"
+          release=$(curl -fsSL --retry 3 -H "$auth" "$api/releases/tags/latest")
+          assets_url=$(jq -er '.assets_url' <<<"$release")
+          : > release-assets.jsonl
+          page=1
+          while :; do
+            payload=$(curl -fsSL --retry 3 -H "$auth" "$assets_url?per_page=100&page=$page")
+            count=$(jq 'length' <<<"$payload")
+            ((count > 0)) || break
+            jq -c '.[] | {name,size,digest}' <<<"$payload" >> release-assets.jsonl
+            page=$((page+1))
+          done
+          curl -fsSL --retry 3 --retry-all-errors \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/latest/arch_lib.db.tar.gz" \
+            -o repo.db.tar.gz
+          python3 - <<'PY'
+          import json,tarfile,sys,os
+          assets={}
+          with open('release-assets.jsonl') as f:
+              for line in f:
+                  a=json.loads(line)
+                  assets[a['name']]=a
+          missing=[]
+          size_mismatch=[]
+          digest_mismatch=[]
+          scanned=0
+          with tarfile.open('repo.db.tar.gz','r:gz') as tar:
+              for member in tar:
+                  if not member.name.endswith('/desc'):
+                      continue
+                  data=tar.extractfile(member).read().decode('utf-8')
+                  fields={}
+                  key=None
+                  for line in data.splitlines():
+                      if line.startswith('%') and line.endswith('%'):
+                          key=line.strip('%')
+                      elif line.strip() and key:
+                          fields.setdefault(key,[]).append(line.strip())
+                  filename=fields.get('FILENAME',[''])[0]
+                  if not filename:
+                      raise SystemExit('Repository db entry missing FILENAME: '+member.name)
+                  scanned+=1
+                  asset=assets.get(filename)
+                  if asset is None:
+                      missing.append(filename)
+                      continue
+                  expected_size=fields.get('CSIZE',[None])[0]
+                  if expected_size is not None and asset['size']!=int(expected_size):
+                      size_mismatch.append((filename,int(expected_size),asset['size']))
+                  digest=asset.get('digest') or ''
+                  expected_sha=fields.get('SHA256SUM',[''])[0]
+                  if digest.startswith('sha256:') and expected_sha and digest[7:].lower()!=expected_sha.lower():
+                      digest_mismatch.append(filename)
+          if scanned == 0:
+              raise SystemExit('Repository database is empty or cannot be parsed')
+          lines=[
+              '## Latest Release package-index audit',
+              f'- Indexed packages: **{scanned}**',
+              f'- Release assets: **{len(assets)}**',
+              f'- Missing package assets: **{len(missing)}**',
+              f'- Size mismatches: **{len(size_mismatch)}**',
+              f'- SHA-256 mismatches (where digest exposed): **{len(digest_mismatch)}**',
+          ]
+          for name,values in [('Missing',missing),('Size mismatch',size_mismatch),('Digest mismatch',digest_mismatch)]:
+              if values:
+                  lines.extend([f'### {name}', '~~~~',*[str(v) for v in values[:80]],'~~~~'])
+          report='\n'.join(lines)
+          print(report)
+          if os.getenv('GITHUB_STEP_SUMMARY'):
+              with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+                  f.write(report+'\n')
+          if missing or size_mismatch or digest_mismatch:
+              sys.exit(1)
+          PY

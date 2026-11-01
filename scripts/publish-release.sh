@@ -86,6 +86,8 @@ echo "Release #$RELEASE_ID"
 
 # ── 2. 现有资产清单（分页）─────────────────────────────────────────
 declare -A ASSET_IDS=()
+declare -A ASSET_DIGEST=()
+declare -A ASSET_SIZE=()
 assets_json=$(mktemp)
 : > "$assets_json"
 page=1
@@ -95,9 +97,12 @@ while :; do
     printf '%s\n' "$chunk" >> "$assets_json"
     page=$((page + 1))
 done
-while IFS=$'\t' read -r id name; do
-    [ -n "$name" ] && ASSET_IDS["$name"]="$id"
-done < <(jq -r '.[] | [.id, .name] | @tsv' "$assets_json")
+while IFS=$'\t' read -r id name digest bytes; do
+    [ -n "$name" ] || continue
+    ASSET_IDS["$name"]="$id"
+    ASSET_DIGEST["$name"]="$digest"
+    ASSET_SIZE["$name"]="$bytes"
+done < <(jq -r '.[] | [.id, .name, (.digest // "-"), (.size | tostring)] | @tsv' "$assets_json")
 rm -f "$assets_json"
 echo "Existing assets: ${#ASSET_IDS[@]}"
 
@@ -124,6 +129,28 @@ for vf in "$META_DIR"/version-*.txt; do
                 echo "  missing asset: $pf"
                 need_publish=1
                 MISSING_FILES["$pf"]=1
+            elif [ -f "$REPO_DIR/$pf" ]; then
+                # Same pkgver/filename may represent different bytes after
+                # rebuilding a custom package. Only trust actual asset hashes.
+                remote_size="${ASSET_SIZE[$pf]:--}"
+                remote_digest="${ASSET_DIGEST[$pf]:--}"
+                local_size=$(stat -c '%s' "$REPO_DIR/$pf")
+                differs=0
+                if [ "$remote_size" != "-" ] && [ "$local_size" != "$remote_size" ]; then
+                    differs=1
+                elif [[ "$remote_digest" == sha256:* ]]; then
+                    local_digest=$(sha256sum "$REPO_DIR/$pf" | awk '{print $1}')
+                    if [ "$remote_digest" != "sha256:$local_digest" ]; then
+                        differs=1
+                    fi
+                else
+                    differs=1
+                fi
+                if [ "$differs" -eq 1 ]; then
+                    echo "  asset differs from staged package: $pf — re-uploading"
+                    CHANGED_PKGS["$pkg"]=1
+                    need_publish=1
+                fi
             fi
             if [ -f "$REPO_DIR/$pf.sig" ] && [ -z "${ASSET_IDS[$pf.sig]:-}" ]; then
                 echo "  missing .sig asset: $pf.sig"

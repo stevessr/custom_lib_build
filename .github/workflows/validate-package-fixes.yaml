@@ -1,0 +1,68 @@
+name: Validate AUR package recipes
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'packages.txt'
+      - 'scripts/**'
+      - 'custom-pkgs/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse shell scripts and custom PKGBUILDs
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            bash -n "$script"
+          done < <(find scripts -type f -name '*.sh' -print0)
+          while IFS= read -r -d '' recipe; do
+            bash -n "$recipe"
+          done < <(find custom-pkgs -type f -name PKGBUILD -print0)
+
+      - name: Verify essential package bootstrap paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -qxF 'python-fpdf2' packages.txt
+          grep -qxF 'python-tree-sitter-objc' packages.txt
+          grep -qxF 'python-tree-sitter-groovy' packages.txt
+          test -f custom-pkgs/python-tree-sitter-objc/PKGBUILD
+          test -f scripts/pre-build/graphify.sh
+          ! grep -qxF 'wivrn-client' packages.txt
+          test -f custom-pkgs/openuuyc-git/PKGBUILD
+          test -f custom-pkgs/openuuyc-git/openuuyc-git.install
+          test -f scripts/pre-build/ocrmypdf.sh
+          grep -q 'Validate package archives' .github/workflows/publish-repo.yaml
+          grep -q 'ASSET_DIGEST' scripts/publish-release.sh
+          grep -q 'asset differs from staged package' scripts/publish-release.sh
+
+      - name: Verify Arch multilib configuration activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          conf=$(mktemp)
+          trap 'rm -f "$conf"' EXIT
+          printf '%s\n' '#[multilib]' '#Include = /etc/pacman.d/mirrorlist' > "$conf"
+          if ! grep -qxF '[multilib]' "$conf"; then
+            printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> "$conf"
+          fi
+          grep -qxF '[multilib]' "$conf"
+          grep -qxF 'Include = /etc/pacman.d/mirrorlist' "$conf"
+          # Idempotence: existing enabled repo cannot be registered twice.
+          before=$(grep -cxF '[multilib]' "$conf")
+          if ! grep -qxF '[multilib]' "$conf"; then
+            printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> "$conf"
+          fi
+          after=$(grep -cxF '[multilib]' "$conf")
+          test "$before" = "$after"

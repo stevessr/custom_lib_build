@@ -115,6 +115,14 @@ install_aur_dep() {
         bash "$hook" "$dir" "$pkg"
     fi
 
+    # The Python grammar wheel embeds its parser. Some upstream AUR recipes
+    # still require a separate, unavailable tree-sitter-LANGUAGE native package.
+    # Keep Python/ABI requirements intact and prove the resulting import works.
+    if [[ "$pkg" == python-tree-sitter-* && "$base" == "$pkg" ]] && \
+       [ -f "${GITHUB_WORKSPACE:-}/scripts/pre-build/python-tree-sitter-grammar.sh" ]; then
+        bash "$GITHUB_WORKSPACE/scripts/pre-build/python-tree-sitter-grammar.sh" "$dir" "$pkg"
+    fi
+
     # Each dependency can use a generic upstream filename such as v2.2.tar.gz.
     # Isolate makepkg's source cache by AUR PackageBase to prevent one package
     # from reusing another package's unrelated archive from the shared SRCDEST.
@@ -145,6 +153,17 @@ install_aur_dep() {
         tail -50 "$AUR_DEPS_DIR/pacman-u-${base}.log" >&2 || true
         exit 1
     }
+
+    # Verify the actual installed Python binding imports. This catches
+    # accidental removal of a shared library that the wheel really needs.
+    if [[ "$pkg" == python-tree-sitter-* ]]; then
+        python - "$pkg" <<'PY'
+import importlib,sys
+name=sys.argv[1][len("python-"):].replace("-","_")
+module=importlib.import_module(name)
+print("[hook] Python grammar import OK:", name, getattr(module, "__file__", "builtin"))
+PY
+    fi
 
     if ! pacman -T "$pkg" >/dev/null 2>&1; then
         echo "  [hook] ✗ $base built successfully but did not satisfy dependency: $pkg" >&2

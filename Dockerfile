@@ -32,7 +32,12 @@ RUN rm -rf /etc/pacman.d/gnupg && pacman-key --init && pacman-key --populate arc
 #      （AUR 包构建的高频依赖，预装免去每次下载）
 #    - tar / zip / unzip / wget / curl: 源码下载与打包工具
 #    - gnupg / jq / pacman-contrib / sudo: 发布与构建流程依赖
-RUN pacman -Syu --noconfirm && \
+# WiVRn/OpenXR need 32-bit libraries. Enable the official multilib repository.
+RUN if ! grep -qxF '[multilib]' /etc/pacman.conf; then \
+      printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf; \
+    fi && \
+    pacman -Syu --noconfirm && \
+    pacman -Si lib32-libglvnd lib32-vulkan-icd-loader >/dev/null && \
     pacman -S --noconfirm --needed \
       base-devel git gnupg jq libglvnd pacman-contrib sudo \
       clang llvm lld cmake ninja ccache \

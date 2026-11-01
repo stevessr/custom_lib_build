@@ -116,6 +116,9 @@ pkgver() {
 prepare() {
   cd "$srcdir"
 
+  # Fresh attempt must not inherit an old ASAR repack marker from srcdir.
+  rm -f "$srcdir/.repack-ion-dist" "$srcdir/.desktop-locale-in-asar"
+  
   # ── 1. 官方 .deb（版本 / 校验和来自 apt 索引） ─────────────────────
   local entry ver file sha
   entry="$(_latest)"
@@ -168,9 +171,88 @@ NODE
     return 1
   }
 
+  # Claude Desktop 4.29+ can ship ion-dist as an Electron ASAR instead of
+  # a directory. Work on an extracted copy and repack only after BOTH locale
+  # and renderer-model patch checks succeed. Never skip a missing anchor.
+  local ion_resources="$srcdir/deb/usr/lib/claude-desktop/resources"
+  if [[ -f "$ion_resources/ion-dist.asar" && ! -d "$ion_resources/ion-dist" ]]; then
+    ( cd "$srcdir/claude-app-patch" && node - "$ion_resources/ion-dist.asar" "$ion_resources/ion-dist" <<'NODE'
+const asar = require('@electron/asar');
+asar.extractAll(process.argv[2], process.argv[3]);
+NODE
+    ) || return 1
+    printf '1\n' > "$srcdir/.repack-ion-dist"
+  fi
+
+  # Claude's Linux resources may place the SPA/i18n in resources/locales/.
+  # Expose that *same* tree through temporary root paths for the existing
+  # locale and model patcher; preserve the upstream runtime directory.
+  # Claude Desktop 4.4212 stores the official English desktop locale
+  # inside app.asar/resources/i18n, rather than resources/en-US.json.
+  # Extract the genuine English baseline; do not manufacture a fallback map.
+  if [[ ! -f "$ion_resources/en-US.json" ]]; then
+    ( cd "$srcdir/claude-app-patch" && node - "$ion_resources/app.asar" "$ion_resources/en-US.json" <<'NODE'
+const fs = require('fs');
+const asar = require('@electron/asar');
+const raw = asar.extractFile(process.argv[2], 'resources/i18n/en-US.json');
+const baseline = JSON.parse(raw.toString('utf8'));
+if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline) || !Object.keys(baseline).length) {
+  throw new Error('Official app.asar desktop en-US locale is invalid');
+}
+fs.writeFileSync(process.argv[3], raw);
+console.log('Official app.asar English locale: ' + Object.keys(baseline).length + ' keys');
+NODE
+    ) || return 1
+    touch "$srcdir/.desktop-locale-in-asar"
+    python3 "$GITHUB_WORKSPACE/scripts/claude-inject-asar-locale.py" "$srcdir/claude-app-patch/setup.js" || return 1
+    node --check "$srcdir/claude-app-patch/setup.js" || return 1
+  fi
+
+  local ion_layout=root
+  if [[ ! -d "$ion_resources/ion-dist/assets/v1" &&
+        -d "$ion_resources/locales/ion-dist/assets/v1" &&
+        -f "$ion_resources/locales/en-US.json" ]]; then
+    if [[ -e "$ion_resources/ion-dist" || -L "$ion_resources/ion-dist" ]]; then
+      echo "Ambiguous Claude resources layout; not replacing ion-dist" >&2
+      return 1
+    fi
+    ln -s locales/ion-dist "$ion_resources/ion-dist"
+    if [[ ! -e "$ion_resources/en-US.json" && ! -L "$ion_resources/en-US.json" ]]; then
+      ln -s locales/en-US.json "$ion_resources/en-US.json"
+    fi
+    ion_layout=locales
+  fi
+  if [[ ! -d "$ion_resources/ion-dist/assets/v1" || ! -f "$ion_resources/en-US.json" ]]; then
+    echo "Claude Desktop resources layout differs from supported root/locales paths:" >&2
+    find "$ion_resources" -maxdepth 6 \( -name 'ion-dist*' -o -name 'en-US.json' -o -name '*.asar' \) -print | head -80 >&2
+    echo "== Claude resources directory layout ==" >&2
+    find "$ion_resources" -maxdepth 4 -mindepth 1 -type d -not -path '*/node_modules/*' -print | head -110 >&2 || true
+    echo "== ion-dist JS/JSON/HTML files ==" >&2
+    find "$ion_resources/ion-dist" -maxdepth 5 -type f \( -name '*.js' -o -name '*.json' -o -name '*.html' \) -print | head -90 >&2 || true
+    echo "== app.asar locale/resource entries ==" >&2
+    ( cd "$srcdir/claude-app-patch" && node - "$ion_resources/app.asar" <<'NODE'
+const asar = require('@electron/asar');
+for (const f of asar.listPackage(process.argv[2]).filter(x => /ion-dist|en-US\.json|locales|i18n|assets/.test(x)).slice(0, 110)) console.error(f);
+NODE
+    ) || true
+    return 1
+  fi
+
   # ── 3. 安装简体中文界面资源 ────────────────────────────────────────
   node claude-app-patch/setup.js zh-resources --lang "$_lang" \
     --resources "$srcdir/deb/usr/lib/claude-desktop/resources"
+  if [[ "$ion_layout" == locales ]]; then
+    # zh-resources writes root zh-CN.json; actual Electron locale lookup in
+    # this layout reads resources/locales/zh-CN.json.
+    install -Dm644 "$ion_resources/$_lang.json" "$ion_resources/locales/$_lang.json"
+  fi
+
+  # The patch-asar implementation preserves .unpacked native modules.
+  # Inject the generated locale in its staging tree before repacking.
+  if [[ -f "$srcdir/.desktop-locale-in-asar" ]]; then
+    export CLAUDE_DESKTOP_LOCALE_SOURCE="$ion_resources/$_lang.json"
+    export CLAUDE_DESKTOP_LOCALE_LANG="$_lang"
+  fi
 
   # ── 4. 打补丁（含模型选择器与中文界面 hook） ─────────────────────
   rm -rf patched
@@ -194,6 +276,16 @@ NODE
     }
   done
 
+  if [[ -f "$srcdir/.desktop-locale-in-asar" ]]; then
+    ( cd "$srcdir/claude-app-patch" && node - "$srcdir/patched/app.asar" "$_lang" <<'NODE'
+const asar = require('@electron/asar');
+const data = JSON.parse(asar.extractFile(process.argv[2], 'resources/i18n/' + process.argv[3] + '.json').toString('utf8'));
+if (!data || typeof data !== 'object' || Object.keys(data).length === 0) throw new Error('Patched app.asar desktop locale missing');
+console.log('Verified patched app.asar desktop locale: ' + process.argv[3] + ' (' + Object.keys(data).length + ' keys)');
+NODE
+    ) || return 1
+  fi
+
   # ── 5. 渲染进程（ion-dist）模型名补丁 ─────────────────────────────
   # 3P 模型名校验在 app.asar 与 ion-dist 各有一份独立代码；漏掉渲染进程那份时，
   # 选择器/设置页仍会报 “这似乎不是 Anthropic 模型” 并拒绝 deepseek/gpt 等名称。
@@ -208,6 +300,29 @@ NODE
     echo "required renderer model patch did not pass for Claude Desktop $ver"
     return 1
   }
+
+  if [[ -f "$srcdir/.repack-ion-dist" ]]; then
+    # Repack the modified SPA into the exact upstream location; do not ship
+    # duplicate unpacked assets that Electron will never load.
+    ( cd "$srcdir/claude-app-patch" && node - "$ion_resources" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const asar = require('@electron/asar');
+const root = process.argv[2];
+const dir = path.join(root, 'ion-dist');
+const archive = path.join(root, 'ion-dist.asar');
+const tmp = archive + '.patched';
+(async () => {
+  await asar.createPackage(dir, tmp);
+  if (!asar.extractFile(tmp, 'index.html').length) {
+    throw new Error('Repacked ion-dist.asar missing index.html');
+  }
+  fs.renameSync(tmp, archive);
+  fs.rmSync(dir, { recursive: true, force: true });
+})().catch(err => { console.error(err); process.exitCode = 1; });
+NODE
+    ) || return 1
+  fi
 
   patched_version="$(read_asar_version "$srcdir/patched/app.asar")"
   [ "$patched_version" = "$ver" ] || {
