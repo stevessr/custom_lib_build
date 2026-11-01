@@ -1,20 +1,53 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
-dir="${1:?Python C++ grammar PKGBUILD directory required}"
+dir="${1:?Python C++ grammar directory required}"
 recipe="$dir/PKGBUILD"
-test -f "$recipe"
-# The Python grammar embeds its native implementation and does not require
-# a separate tree-sitter-cpp=0.23.4 system package.
-python3 - "$recipe" <<'PY'
-import re,sys
-from pathlib import Path
-p=Path(sys.argv[1])
-s=p.read_text()
-pattern=r"""(['"])tree-sitter-cpp=0\.23\.4\1"""
-s2,n=re.subn(pattern,'',s)
-if n!=1:
-    raise SystemExit(f'Expected exactly one native grammar dependency, found {n}')
-p.write_text(s2+'\n# arch_lib: remove erroneous duplicate native grammar dependency\npkgrel=$((pkgrel+1))\n')
-PY
+test -f "$recipe" || { echo "Missing PKGBUILD" >&2; exit 1; }
+if grep -q '^# BEGIN arch_lib self-contained C++ Python binding$' "$recipe"; then
+    echo '[hook] Python C++ binding already adjusted'
+    exit 0
+fi
+# Python tree_sitter_cpp.language() embeds its C++ grammar. It does not link
+# the separate native tree-sitter-cpp runtime. The AUR package occasionally
+# spells the native dependency as tree-sitter-cpp=${pkgver}; filtering the
+# original text by literal version is unreliable.
+cat >> "$recipe" <<'PKGBUILD_PATCH'
+
+# BEGIN arch_lib self-contained C++ Python binding
+_arch_lib_cpp_filtered=()
+_arch_lib_cpp_removed=0
+for _arch_lib_cpp_dep in "${depends[@]}"; do
+    case "$_arch_lib_cpp_dep" in
+        tree-sitter-cpp|tree-sitter-cpp[=\<\>]* )
+            _arch_lib_cpp_removed=$((_arch_lib_cpp_removed + 1)) ;;
+        *) _arch_lib_cpp_filtered+=("$_arch_lib_cpp_dep") ;;
+    esac
+done
+if (( _arch_lib_cpp_removed > 1 )); then
+    echo '[arch_lib] multiple native C++ grammar dependencies; refusing patch' >&2
+    return 1
+fi
+depends=("${_arch_lib_cpp_filtered[@]}")
+if (( _arch_lib_cpp_removed == 1 )); then
+    pkgrel=$((pkgrel + 1))
+fi
+unset _arch_lib_cpp_filtered _arch_lib_cpp_dep _arch_lib_cpp_removed
+# END arch_lib self-contained C++ Python binding
+PKGBUILD_PATCH
 bash -n "$recipe"
-echo "[hook] Python C++ grammar: native system dependency removed, Python binding retained"
+# Verify effective package metadata, not a source-text match.
+(
+    cd "$dir"
+    bash -c '
+        set -euo pipefail
+        source ./PKGBUILD
+        for dependency in "${depends[@]}"; do
+            case "$dependency" in
+                tree-sitter-cpp|tree-sitter-cpp[=\<\>]* )
+                    echo "Native C++ grammar dependency remained: $dependency" >&2
+                    exit 1 ;;
+            esac
+        done
+        printf "[hook] Python C++ binding runtime deps: %s\n" "${depends[*]}"
+    '
+)
