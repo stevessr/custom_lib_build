@@ -171,8 +171,15 @@ openuuyc-git
 # rime
 fcitx5-pinyin-custom-pinyin-dictionary
 
+# PDF server; stirling-pdf-bin requires these AUR-only runtime packages.
+# Publish them too so downstream pacman users can resolve dependencies.
+# The old "stirling-pdf" AUR base contains no PKGBUILD; keep the -bin variant.
+# Order matters for initial dependency bootstrap (see its pre-build hook).
+# (The build matrix itself is parallel; this ordering is for maintenance.)
 # pdf
-stirling-pdf
+python-pdf2image
+python-unoserver
+ocrmypdf
 stirling-pdf-bin
 
 # unknown
