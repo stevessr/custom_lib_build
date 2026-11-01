@@ -1,0 +1,68 @@
+name: Repair mismatched Release database
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/repair-release-db.sh'
+      - 'scripts/release-asset-audit.py'
+      - '.github/workflows/repair-release-index.yaml'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Rewrite ONLY signed DB assets after signature/hash validation'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  dry-run:
+    if: ${{ github.event_name == 'pull_request' || !inputs.apply }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    container:
+      image: ghcr.io/${{ github.repository }}/arch-builder:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate tools and syntax
+        run: |
+          pacman -Syu --noconfirm
+          bash -n scripts/repair-release-db.sh
+          python3 -m py_compile scripts/release-asset-audit.py
+      - name: Verify online packages and simulate index repair (read-only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/repair-release-db.sh --dry-run
+
+  apply:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.apply && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: write
+      packages: read
+    container:
+      image: ghcr.io/${{ github.repository }}/arch-builder:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update and prepare release tools
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm github-cli
+          bash -n scripts/repair-release-db.sh
+      - name: Repair ONLY the signed database after all package checks succeed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: bash scripts/repair-release-db.sh --apply
