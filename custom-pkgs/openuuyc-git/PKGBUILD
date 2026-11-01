@@ -7,20 +7,18 @@
 pkgname=openuuyc-git
 _pkgname=openuuyc
 pkgver=1.0.0.rc.2.r12.g574a090
-pkgrel=1
+pkgrel=2
 pkgdesc="Third-party UU Remote client (Linux port, X11 and Wayland)"
 arch=('x86_64')
 url="https://github.com/stevessr/openuuyc-linux"
 license=('custom')
-depends=('gcc-libs' 'alsa-lib' 'fuse3' 'libx11' 'libxcb' 'libxrandr' 'libxi' 'libxcursor'
+depends=('gcc-libs' 'alsa-lib' 'libva' 'libpulse' 'fuse3' 'libx11' 'libxcb' 'libxrandr' 'libxi' 'libxcursor'
          'libxfixes' 'libxkbcommon' 'libxkbcommon-x11' 'wayland'
          'vulkan-icd-loader' 'noto-fonts-cjk' 'gnome-keyring')
 optdepends=(
     'sdl2-compat: standard gamepad forwarding and rumble'
-    'libva: H.264 hardware decoding'
     'libva-nvidia-driver: NVIDIA VA-API decoding'
     'intel-media-driver: Intel VA-API decoding'
-    'libpulse: desktop audio capture and playback'
     'pipewire: XDG ScreenCast capture on Wayland'
     'xdg-desktop-portal-hyprland: ScreenCast portal on Hyprland'
     'xdg-desktop-portal-gnome: ScreenCast portal on GNOME'
