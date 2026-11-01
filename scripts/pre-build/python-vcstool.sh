@@ -10,6 +10,13 @@ set -euo pipefail
 dir="$1"
 test -f "$dir/PKGBUILD" || { echo "[hook] python-vcstool PKGBUILD missing" >&2; exit 1; }
 
+# Our custom PKGBUILD already replaces pkg_resources in prepare(). Applying
+# the AUR-only package() wrapper a second time incorrectly rejects that fix.
+if grep -q '^# Custom override of the AUR python-vcstool recipe' "$dir/PKGBUILD"; then
+    echo "  [hook] vcstool custom prepare() handles the legacy import"
+    exit 0
+fi
+
 # Do not append the wrapper twice if a cached working tree is reused.
 if grep -q '^# BEGIN arch_lib vcstool compatibility patch$' "$dir/PKGBUILD"; then
     exit 0

@@ -152,6 +152,28 @@ jobs:
           printf '%s\n' "$count" > "$GITHUB_WORKSPACE/.previous_repo_count"
           echo "Partial update preserving $count package entries"
 
+      # ── Validate archives before indexing or upload ─────────────────
+      - name: Validate package archives
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(repos/x86_64/*.pkg.tar.zst)
+          (( ${#packages[@]} > 0 )) || { echo "::error::No package archives"; exit 1; }
+          for file in "${packages[@]}"; do
+            # Qip checks metadata, but zstd -t checks the entire compressed stream.
+            if ! zstd -tq "$file"; then
+              echo "::error file=$file::Corrupt/truncated zstd package"
+              exit 1
+            fi
+            if ! info=$(pacman -Qip "$file"); then
+              echo "::error file=$file::Invalid pacman package"
+              exit 1
+            fi
+            printf '%s\n' "$info" | grep -Eq '^Name[[:space:]]*:' || exit 1
+            printf '%s\n' "$info" | grep -Eq '^Version[[:space:]]*:' || exit 1
+          done
+          echo "Validated ${#packages[@]} complete pacman archives"
+
       # ── Sanitize epoch colons & sign ───────────────────────────────
       - name: Sanitize and sign packages
         run: |

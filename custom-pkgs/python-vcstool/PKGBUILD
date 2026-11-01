@@ -14,6 +14,7 @@ arch=(any)
 url="https://github.com/dirk-thomas/vcstool"
 license=('Apache')
 depends=('python' 'python-setuptools' 'python-yaml')
+makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
 source=("https://github.com/dirk-thomas/vcstool/archive/${pkgver}.tar.gz")
 sha256sums=('2b6e4a97454983166e9a5fe08aca41cd8b28288ef693b954bc0e8b8518eafd3b')
 

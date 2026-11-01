@@ -179,6 +179,7 @@ fcitx5-pinyin-custom-pinyin-dictionary
 # pdf
 python-pdf2image
 python-unoserver
+python-fpdf2
 ocrmypdf
 stirling-pdf-bin
 
@@ -190,7 +191,8 @@ wayvr
 xrizer
 wivrn-dashboard
 wivrn-server
-wivrn-client
+# WiVRn's headset client is an Android APK, not an x86_64 pacman package.
+# Only publish Linux server/dashboard; no fake AUR PKGBUILD for wivrn-client.
 alvr-launcher-bin
 alvr
 
