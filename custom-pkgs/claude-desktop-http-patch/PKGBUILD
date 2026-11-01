@@ -112,6 +112,9 @@ pkgver() {
 prepare() {
   cd "$srcdir"
 
+  # Fresh attempt must not inherit an old ASAR repack marker from srcdir.
+  rm -f "$srcdir/.repack-ion-dist"
+  
   # ── 1. 官方 .deb（版本 / 校验和来自 apt 索引） ─────────────────────
   local entry ver file sha
   entry="$(_latest)"

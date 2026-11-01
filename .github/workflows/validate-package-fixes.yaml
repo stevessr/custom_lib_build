@@ -1,0 +1,54 @@
+name: Validate AUR package recipes
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'packages.txt'
+      - 'scripts/**'
+      - 'custom-pkgs/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse shell scripts and custom PKGBUILDs
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            bash -n "$script"
+          done < <(find scripts -type f -name '*.sh' -print0)
+          while IFS= read -r -d '' recipe; do
+            bash -n "$recipe"
+          done < <(find custom-pkgs -type f -name PKGBUILD -print0)
+
+      - name: Verify essential package bootstrap paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -qxF 'python-fpdf2' packages.txt
+          ! grep -qxF 'wivrn-client' packages.txt
+          test -f custom-pkgs/openuuyc-git/PKGBUILD
+          test -f custom-pkgs/openuuyc-git/openuuyc-git.install
+          test -f scripts/pre-build/ocrmypdf.sh
+          grep -q 'Validate package archives' .github/workflows/publish-repo.yaml
+
+      - name: Verify Arch multilib configuration activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          conf=$(mktemp)
+          trap 'rm -f "$conf"' EXIT
+          printf '%s\n' '#[multilib]' '#Include = /etc/pacman.d/mirrorlist' > "$conf"
+          sed -i -e 's/^#\[multilib\]$/[multilib]/' \
+                 -e '/^\[multilib\]$/{n;s/^#Include /Include /;}' "$conf"
+          grep -qxF '[multilib]' "$conf"
+          grep -qxF 'Include = /etc/pacman.d/mirrorlist' "$conf"
