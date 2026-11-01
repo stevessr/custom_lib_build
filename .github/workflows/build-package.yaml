@@ -97,9 +97,12 @@ jobs:
           # arch-builder 镜像每日维护，这里只做增量升级：
           # 未变化的包命中缓存/镜像层，零或少量下载
           # Enable multilib even when using a previously built GHCR image.
-          sed -i -e 's/^#\[multilib\]$/[multilib]/' \
-                 -e '/^\[multilib\]$/{n;s/^#Include /Include /;}' /etc/pacman.conf
+          if ! grep -qxF '[multilib]' /etc/pacman.conf; then
+            printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
+          fi
           pacman -Syu --noconfirm
+          # Fail early if the database was not actually enabled.
+          pacman -Si lib32-libglvnd lib32-vulkan-icd-loader >/dev/null
 
       - name: Setup builder user
         run: |

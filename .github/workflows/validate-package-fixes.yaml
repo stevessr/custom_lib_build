@@ -52,7 +52,15 @@ jobs:
           conf=$(mktemp)
           trap 'rm -f "$conf"' EXIT
           printf '%s\n' '#[multilib]' '#Include = /etc/pacman.d/mirrorlist' > "$conf"
-          sed -i -e 's/^#\[multilib\]$/[multilib]/' \
-                 -e '/^\[multilib\]$/{n;s/^#Include /Include /;}' "$conf"
+          if ! grep -qxF '[multilib]' "$conf"; then
+            printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> "$conf"
+          fi
           grep -qxF '[multilib]' "$conf"
           grep -qxF 'Include = /etc/pacman.d/mirrorlist' "$conf"
+          # Idempotence: existing enabled repo cannot be registered twice.
+          before=$(grep -cxF '[multilib]' "$conf")
+          if ! grep -qxF '[multilib]' "$conf"; then
+            printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> "$conf"
+          fi
+          after=$(grep -cxF '[multilib]' "$conf")
+          test "$before" = "$after"
