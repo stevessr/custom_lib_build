@@ -42,6 +42,13 @@ jobs:
           ! grep -qxF 'wivrn-client' packages.txt
           test -f custom-pkgs/openuuyc-git/PKGBUILD
           test -f custom-pkgs/openuuyc-git/openuuyc-git.install
+          # Arch GCC LTO creates cross-language objects rust-lld cannot link.
+          (
+            source custom-pkgs/openuuyc-git/PKGBUILD
+            [[ " ${options[*]} " == *' !lto '* ]]
+            [[ " ${depends[*]} " == *' libva '* ]]
+            [[ " ${depends[*]} " == *' libpulse '* ]]
+          )
           test -f scripts/pre-build/ocrmypdf.sh
           grep -q 'Validate package archives' .github/workflows/publish-repo.yaml
           grep -q 'ASSET_DIGEST' scripts/publish-release.sh

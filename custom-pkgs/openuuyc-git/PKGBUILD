@@ -7,7 +7,7 @@
 pkgname=openuuyc-git
 _pkgname=openuuyc
 pkgver=1.0.0.rc.2.r12.g574a090
-pkgrel=2
+pkgrel=3
 pkgdesc="Third-party UU Remote client (Linux port, X11 and Wayland)"
 arch=('x86_64')
 url="https://github.com/stevessr/openuuyc-linux"
@@ -30,8 +30,12 @@ optdepends=(
 makedepends=('cargo' 'rust' 'cmake' 'clang' 'nasm' 'pkg-config')
 provides=('openuuyc')
 conflicts=('openuuyc' 'openuuyc-bin')
-# The release profile keeps only debuginfo; nothing is left to split out.
-options=('!debug')
+# The embedded NetEq C/C++ and ring/zstd-sys native objects are linked by
+# rust-lld. Arch's default GCC -flto=auto emits GCC LTO objects that rust-lld
+# cannot resolve; this causes ZSTD_*, ring_core_* and ou_neteq_* undefined
+# symbols at final link. Disable only makepkg's cross-toolchain C/C++ LTO.
+# Cargo's normal --release optimization remains enabled by Cargo.toml.
+options=('!debug' '!lto')
 install=openuuyc-git.install
 source=("$pkgname::git+${url}.git#branch=linux-port")
 sha256sums=('SKIP')
