@@ -21,7 +21,7 @@ name: Watch Magpie Releases
 # 同一编排入口，避免与每日 cron / push 并发发布互相覆盖。
 concurrency:
   group: arch-lib-build-repository
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 on:
   # 上游 release webhook（repository_dispatch）转发到这里：
@@ -81,4 +81,7 @@ jobs:
     uses: ./.github/workflows/publish-repo.yaml
     with:
       partial-update: true
+      # A Magpie-only release must not require newly built Claude artifacts.
+      # Full publishes still enforce the Claude patch artifact gate.
+      allow-missing-required-claude: true
     secrets: inherit

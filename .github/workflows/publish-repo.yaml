@@ -83,7 +83,6 @@ jobs:
           pattern: package-*
           path: package-artifacts
           merge-multiple: false
-          fail-if-not-found: false
 
       - name: Download package build artifacts (from build run ${{ inputs.build-run-id }})
         if: ${{ inputs.build-run-id != '' }}
@@ -117,6 +116,14 @@ jobs:
 
           if [ "$package_count" -eq 0 ]; then
             echo "No package artifacts downloaded"
+            exit 1
+          fi
+
+          # Never allow a full repository publish to suppress its required
+          # Claude artifact gate. Only explicitly approved partial updates
+          # (e.g. Magpie) may inherit the existing Claude packages.
+          if [ "${{ inputs.allow-missing-required-claude }}" = "true" ] && [ "${{ inputs.partial-update }}" != "true" ]; then
+            echo "::error::Claude bypass is only permitted for partial publication"
             exit 1
           fi
 

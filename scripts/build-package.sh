@@ -119,6 +119,14 @@ else
     fi
 fi
 
+# The AUR bootstrap path already corrects self-contained Python grammar
+# wheels that incorrectly depend on an unshipped native tree-sitter-LANGUAGE
+# package. Apply the same fail-closed correction for top-level matrix builds;
+# otherwise graphify may bootstrap fine while independent grammar jobs fail.
+if [[ "$PKG" == python-tree-sitter-* ]]; then
+    bash "$GITHUB_WORKSPACE/scripts/pre-build/python-tree-sitter-grammar.sh" "$PKG_DIR" "$PKG"
+fi
+
 # ── Pre-build hook (per-package tweaks) ────────────────────────────
 HOOK="$GITHUB_WORKSPACE/scripts/pre-build/$PKG.sh"
 if [ -f "$HOOK" ]; then
