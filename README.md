@@ -180,6 +180,14 @@ sudo systemctl enable --now openuuyc-vkms.socket
 
 Webhook 走 `Build AUR Repository` 的完整编排，保留所有包的数据库条目，不用单包数据库覆盖整个仓库。源码 commit 未变化的 `-git` 包复用上次产物；webhook payload 不会改变构建 checkout 或执行命令。
 
+## Magpie 自动更新
+
+`magpie-bin` 和 `magpie-cli-bin` 跟踪 [`yetone/magpie-releases`](https://github.com/yetone/magpie-releases)。`.github/workflows/watch-magpie.yaml` 在 UTC 06:00、12:00、18:00 检查上游版本；UTC 00:00 的每日全量构建也会更新这两个包。支持手动触发；无需配置额外密钥或 webhook，定时任务会自动发现新版本。
+
+上游版本变化或任一包的已发布版本标记缺失/落后时，工作流会同时构建两个包。只有两者都构建成功后才更新 `latest` Release，避免单包失败导致另一个包永久停留在旧版本。PKGBUILD 会按架构下载对应 Release 资产并校验上游提供的 SHA-256 digest。
+
+如有上游事件转发器，也可向本仓库发送 `repository_dispatch` 事件 `magpie-release` 以提前检查；工作流始终以 GitHub API 返回的最新 Release 为准，不使用事件 payload 决定构建版本。
+
 ## `-git` 包跳过逻辑
 
 对于名称以 `-git` 结尾的包，构建脚本会：
