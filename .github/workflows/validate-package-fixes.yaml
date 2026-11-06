@@ -54,6 +54,18 @@ jobs:
           grep -q 'ASSET_DIGEST' scripts/publish-release.sh
           grep -q 'asset differs from staged package' scripts/publish-release.sh
 
+      - name: Test Python Tree-sitter grammar dependency repair
+        shell: bash
+        run: bash scripts/tests/test-tree-sitter-grammar.sh
+
+      - name: Check safe Magpie partial publish settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'allow-missing-required-claude: true' .github/workflows/watch-magpie.yaml
+          grep -q 'partial-update: true' .github/workflows/watch-magpie.yaml
+          grep -q 'Claude bypass is only permitted for partial publication' .github/workflows/publish-repo.yaml
+
       - name: Verify Arch multilib configuration activation
         shell: bash
         run: |

@@ -33,6 +33,8 @@ jobs:
           - openuuyc-git
           - ros2-kilted
           - graphify
+          - python-tree-sitter-ruby
+          - python-tree-sitter-json
           - python-vcstool
           - ocrmypdf
           - wivrn-dashboard
