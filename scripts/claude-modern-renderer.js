@@ -95,8 +95,8 @@ function verifyAsar(archive) {
     }
   }
   if (patched === 0) {
-    const allRenderer = asar.listPackage(archive).map(name => name.replace(/^\\/+/, ''))
-      .filter(name => /^\\.vite\\/renderer\\/.*\\.js$/.test(name));
+    const allRenderer = asar.listPackage(archive).map(name => name.replace(/^\/+/, ''))
+      .filter(name => /^\.vite\/renderer\/.*\.js$/.test(name));
     for (const name of allRenderer) {
       const source = asar.extractFile(archive, name).toString('utf8');
       if (NEAR.some(anchor => source.includes(anchor)))
