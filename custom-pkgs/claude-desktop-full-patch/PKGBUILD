@@ -209,7 +209,14 @@ NODE
   fi
 
   local ion_layout=root
-  if [[ ! -d "$ion_resources/ion-dist/assets/v1" &&
+  # Modern Claude Desktop keeps renderer JS in app.asar/.vite/renderer
+  # and uses resources/ion-dist only as a bootstrap shell.
+  if [[ -f "$ion_resources/ion-dist/index.html" &&
+        ! -d "$ion_resources/ion-dist/assets/v1" ]]; then
+    ion_layout=modern
+    echo "Detected modern Claude Desktop app.asar renderer layout"
+  fi
+  if [[ "$ion_layout" != modern && ! -d "$ion_resources/ion-dist/assets/v1" &&
         -d "$ion_resources/locales/ion-dist/assets/v1" &&
         -f "$ion_resources/locales/en-US.json" ]]; then
     if [[ -e "$ion_resources/ion-dist" || -L "$ion_resources/ion-dist" ]]; then
@@ -222,7 +229,7 @@ NODE
     fi
     ion_layout=locales
   fi
-  if [[ ! -d "$ion_resources/ion-dist/assets/v1" || ! -f "$ion_resources/en-US.json" ]]; then
+  if [[ ( "$ion_layout" != modern && ! -d "$ion_resources/ion-dist/assets/v1" ) || ! -f "$ion_resources/en-US.json" ]]; then
     echo "Claude Desktop resources layout differs from supported root/locales paths:" >&2
     find "$ion_resources" -maxdepth 6 \( -name 'ion-dist*' -o -name 'en-US.json' -o -name '*.asar' \) -print | head -80 >&2
     echo "== Claude resources directory layout ==" >&2
@@ -239,8 +246,15 @@ NODE
   fi
 
   # ── 3. 安装简体中文界面资源 ────────────────────────────────────────
-  node claude-app-patch/setup.js zh-resources --lang "$_lang" \
-    --resources "$srcdir/deb/usr/lib/claude-desktop/resources"
+  if [[ "$ion_layout" == modern ]]; then
+    node "$GITHUB_WORKSPACE/scripts/claude-modern-zh.js" \
+      "$ion_resources" "$srcdir/claude-app-patch" "$_lang" || return 1
+    export CLAUDE_MODERN_RENDERER_SCRIPT="$GITHUB_WORKSPACE/scripts/claude-modern-renderer.js"
+    export CLAUDE_PATCH_DIR="$srcdir/claude-app-patch"
+  else
+    node claude-app-patch/setup.js zh-resources --lang "$_lang" \
+      --resources "$srcdir/deb/usr/lib/claude-desktop/resources" || return 1
+  fi
   if [[ "$ion_layout" == locales ]]; then
     # zh-resources writes root zh-CN.json; actual Electron locale lookup in
     # this layout reads resources/locales/zh-CN.json.
@@ -289,17 +303,25 @@ NODE
   # ── 5. 渲染进程（ion-dist）模型名补丁 ─────────────────────────────
   # 3P 模型名校验在 app.asar 与 ion-dist 各有一份独立代码；漏掉渲染进程那份时，
   # 选择器/设置页仍会报 “这似乎不是 Anthropic 模型” 并拒绝 deepseek/gpt 等名称。
-  if ! node claude-app-patch/setup.js patch-models \
-      --resources "$srcdir/deb/usr/lib/claude-desktop/resources" >"$patch_log" 2>&1; then
+  if [[ "$ion_layout" == modern ]]; then
+    # A patched model validator must survive ASAR repack, or fail closed.
+    ( cd "$srcdir/claude-app-patch" &&
+      node "$GITHUB_WORKSPACE/scripts/claude-modern-renderer.js" --verify \
+        "$srcdir/patched/app.asar" ) || return 1
+  else
+    if ! node claude-app-patch/setup.js patch-models \
+        --resources "$srcdir/deb/usr/lib/claude-desktop/resources" >"$patch_log" 2>&1; then
+      cat "$patch_log"
+      echo "Claude Desktop renderer model patch failed for version $ver"
+      return 1
+    fi
     cat "$patch_log"
-    echo "Claude Desktop renderer model patch failed for version $ver"
-    return 1
+    grep -Eq '^PATCH_RESULT renderer-models state=(patched|already-compatible) hits=[1-9][0-9]*$' "$patch_log" || {
+      echo "required renderer model patch did not pass for Claude Desktop $ver"
+      return 1
+    }
+  
   fi
-  cat "$patch_log"
-  grep -Eq '^PATCH_RESULT renderer-models state=(patched|already-compatible) hits=[1-9][0-9]*$' "$patch_log" || {
-    echo "required renderer model patch did not pass for Claude Desktop $ver"
-    return 1
-  }
 
   if [[ -f "$srcdir/.repack-ion-dist" ]]; then
     # Repack the modified SPA into the exact upstream location; do not ship

@@ -29,6 +29,9 @@ jobs:
           while IFS= read -r -d '' recipe; do
             bash -n "$recipe"
           done < <(find custom-pkgs -type f -name PKGBUILD -print0)
+          python3 -m py_compile scripts/claude-inject-asar-locale.py
+          node --check scripts/claude-modern-renderer.js
+          node --check scripts/claude-modern-zh.js
 
       - name: Verify essential package bootstrap paths
         shell: bash
@@ -47,7 +50,9 @@ jobs:
             source custom-pkgs/openuuyc-git/PKGBUILD
             [[ " ${options[*]} " == *' !lto '* ]]
             [[ " ${depends[*]} " == *' libva '* ]]
-            [[ " ${depends[*]} " == *' libpulse '* ]]
+            # PulseAudio support is optional; Arch users without audio capture
+            # should not be forced to install it as a hard dependency.
+            [[ " ${optdepends[*]} " == *' libpulse:'* ]]
           )
           test -f scripts/pre-build/ocrmypdf.sh
           grep -q 'Validate package archives' .github/workflows/publish-repo.yaml
