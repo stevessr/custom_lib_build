@@ -77,4 +77,15 @@ function verifyAsar(archive) {
   console.log('Verified modern renderer in app.asar: ' + patched + ' patched anchor(s)');
 }
 
+if (require.main === module) {
+  try {
+    if (process.argv[2] !== '--verify' || !process.argv[3])
+      throw new Error('Usage: claude-modern-renderer.js --verify patched/app.asar');
+    verifyAsar(process.argv[3]);
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  }
+}
+
 module.exports = { patchRenderer, verifyAsar };
