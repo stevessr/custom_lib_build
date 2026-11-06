@@ -60,6 +60,35 @@ function patchRenderer(root) {
   // Do not produce a package that silently disables the 3P model selector
   // compatibility check when upstream changes the minified implementation.
   if (hits === 0) {
+    // Limited diagnostics from public app bundles (never print a whole bundle).
+    // A future upstream minifier might move the validator to another chunk.
+    let reported = 0;
+    const markers = [
+      /expected a gateway model route referencing an Anthropic model/gi,
+      /Anthropic model/gi,
+      /gateway model route/gi,
+      /inferenceModels/gi,
+      /toLowerCase\\(\\)/gi,
+    ];
+    for (const file of walkJs(path.join(root, '.vite', 'renderer'))) {
+      const source = fs.readFileSync(file, 'utf8');
+      const candidates = [...source.matchAll(ANCHOR)];
+      if (candidates.length) {
+        console.error('Renderer diagnostic: ' + path.relative(root, file) +
+          ' candidate validators=' + candidates.length);
+      }
+      for (const re of markers) {
+        re.lastIndex = 0;
+        const m = re.exec(source);
+        if (!m) continue;
+        if (reported++ >= 16) break;
+        console.error('Renderer diagnostic: ' + path.relative(root, file) +
+          ' marker=' + re.source + ' sample=' +
+          source.slice(Math.max(0, m.index - 140), m.index + 220)
+            .replace(/[\\r\\n]/g, ' '));
+      }
+      if (reported >= 16) break;
+    }
     throw new Error('Modern Claude renderer model validation anchor not found; refusing unverified patch');
   }
   console.log('PATCH_RESULT renderer-models state=patched hits=' + hits);
