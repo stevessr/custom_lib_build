@@ -195,6 +195,8 @@ wivrn-server
 # Only publish Linux server/dashboard; no fake AUR PKGBUILD for wivrn-client.
 alvr-launcher-bin
 alvr
+openhmd-git
+steamvr-openhmd-git
 
 
 # Graphify: required runtime language packages also published for clients.
