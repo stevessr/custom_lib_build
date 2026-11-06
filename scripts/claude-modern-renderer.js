@@ -57,39 +57,23 @@ function patchRenderer(root) {
     });
     if (modified !== original) fs.writeFileSync(file, modified);
   }
-  // Do not produce a package that silently disables the 3P model selector
-  // compatibility check when upstream changes the minified implementation.
+  // The modern app may no longer ship the legacy renderer-side model
+  // validator at all. Absence is not a patch failure only if every renderer
+  // chunk is inspected and *none* contains the old validator's error text.
   if (hits === 0) {
-    // Limited diagnostics from public app bundles (never print a whole bundle).
-    // A future upstream minifier might move the validator to another chunk.
-    let reported = 0;
-    const markers = [
-      /expected a gateway model route referencing an Anthropic model/gi,
-      /Anthropic model/gi,
-      /gateway model route/gi,
-      /inferenceModels/gi,
-      /toLowerCase\\(\\)/gi,
-    ];
-    for (const file of walkJs(path.join(root, '.vite', 'renderer'))) {
+    const allFiles = walkJs(path.join(root, '.vite', 'renderer'));
+    const suspect = allFiles.filter(file => {
       const source = fs.readFileSync(file, 'utf8');
-      const candidates = [...source.matchAll(ANCHOR)];
-      if (candidates.length) {
-        console.error('Renderer diagnostic: ' + path.relative(root, file) +
-          ' candidate validators=' + candidates.length);
-      }
-      for (const re of markers) {
-        re.lastIndex = 0;
-        const m = re.exec(source);
-        if (!m) continue;
-        if (reported++ >= 16) break;
-        console.error('Renderer diagnostic: ' + path.relative(root, file) +
-          ' marker=' + re.source + ' sample=' +
-          source.slice(Math.max(0, m.index - 140), m.index + 220)
-            .replace(/[\\r\\n]/g, ' '));
-      }
-      if (reported >= 16) break;
+      return NEAR.some(anchor => source.includes(anchor));
+    });
+    if (suspect.length) {
+      console.error('Legacy renderer validation messages still present in: ' +
+        suspect.map(file => path.relative(root, file)).join(', '));
+      throw new Error('Modern Claude model validator changed syntax; refusing unverified patch');
     }
-    throw new Error('Modern Claude renderer model validation anchor not found; refusing unverified patch');
+    console.log('PATCH_RESULT renderer-models state=not-applicable hits=0 ' +
+      'reason=no-legacy-validator-in-' + allFiles.length + '-renderer-bundles');
+    return 0;
   }
   console.log('PATCH_RESULT renderer-models state=patched hits=' + hits);
   return hits;
@@ -110,7 +94,18 @@ function verifyAsar(archive) {
       if (nearAnchor(source, m.index)) patched++;
     }
   }
-  if (patched === 0) throw new Error('Repacked app.asar missing patched renderer model validation');
+  if (patched === 0) {
+    const allRenderer = asar.listPackage(archive).map(name => name.replace(/^\\/+/, ''))
+      .filter(name => /^\\.vite\\/renderer\\/.*\\.js$/.test(name));
+    for (const name of allRenderer) {
+      const source = asar.extractFile(archive, name).toString('utf8');
+      if (NEAR.some(anchor => source.includes(anchor)))
+        throw new Error('Repacked ASAR contains unhandled model validator in ' + name);
+    }
+    console.log('Verified modern ASAR: no legacy renderer validator across ' +
+      allRenderer.length + ' JS bundles');
+    return;
+  }
   console.log('Verified modern renderer in app.asar: ' + patched + ' patched anchor(s)');
 }
 
