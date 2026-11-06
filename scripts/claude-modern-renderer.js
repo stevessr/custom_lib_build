@@ -5,7 +5,14 @@
 // app.asar is re-packed by claude-app-patch (preserves .unpacked native files).
 const fs = require('fs');
 const path = require('path');
-const asar = require(path.join(process.env.CLAUDE_PATCH_DIR, 'node_modules', '@electron', 'asar'));
+// Resolve ASAR exactly as the pinned setup.js does. The renderer patch does
+// not need ASAR at all; only load it during post-repack verification.
+function getAsar() {
+  const { createRequire } = require('module');
+  const patchDir = process.env.CLAUDE_PATCH_DIR;
+  if (!patchDir) throw new Error('CLAUDE_PATCH_DIR must point to the installed patch tool');
+  return createRequire(path.join(patchDir, 'setup.js'))('@electron/asar');
+}
 
 const ANCHOR = /function ([\w$]+)\(e\)\{let t=e\.toLowerCase\(\);return [\w$]+\.test\(t\)\?!1:[\w$]+\.test\(t\)\|\|[\w$]+\.some\(\(?[\w$]+=>t\.includes\([\w$]+\)\)?\)\}/g;
 const PATCHED = /function [\w$]+\(e\)\{return!0\}/g;
@@ -60,6 +67,7 @@ function patchRenderer(root) {
 }
 
 function verifyAsar(archive) {
+  const asar = getAsar();
   const entries = asar.listPackage(archive).map(name => name.replace(/^\/+/, ''))
     .filter(name => /^\.vite\/renderer\/main_window\/assets\/.*\.js$/.test(name));
   if (!entries.length) throw new Error('Repacked app.asar missing modern renderer JS');
