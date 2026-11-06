@@ -5,7 +5,7 @@
 // app.asar is re-packed by claude-app-patch (preserves .unpacked native files).
 const fs = require('fs');
 const path = require('path');
-const asar = require('@electron/asar');
+const asar = require(path.join(process.env.CLAUDE_PATCH_DIR, 'node_modules', '@electron', 'asar'));
 
 const ANCHOR = /function ([\w$]+)\(e\)\{let t=e\.toLowerCase\(\);return [\w$]+\.test\(t\)\?!1:[\w$]+\.test\(t\)\|\|[\w$]+\.some\(\(?[\w$]+=>t\.includes\([\w$]+\)\)?\)\}/g;
 const PATCHED = /function [\w$]+\(e\)\{return!0\}/g;
