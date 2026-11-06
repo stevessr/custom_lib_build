@@ -12,7 +12,12 @@ if len(sys.argv) != 2:
     sys.exit("Usage: claude-inject-asar-locale.py linux/setup.js")
 p = Path(sys.argv[1])
 original = p.read_text()
-old = "    asar().extractAll(srcAsar, TMP);\n\n    const applied = applyPatches(TMP, patches);"
+old = "    asar().extractAll(srcAsar, TMP);\n\n    // 4.23118+: the renderer lives inside app.asar, not ion-dist.
+    if (process.env.CLAUDE_MODERN_RENDERER_SCRIPT) {
+        require(process.env.CLAUDE_MODERN_RENDERER_SCRIPT).patchRenderer(TMP);
+    }
+
+    const applied = applyPatches(TMP, patches);"
 new = """    asar().extractAll(srcAsar, TMP);
     // Arch: newer official Claude stores desktop translations inside app.asar.
     if (process.env.CLAUDE_DESKTOP_LOCALE_SOURCE) {
