@@ -197,7 +197,7 @@ alvr-launcher-bin
 alvr
 openhmd-git
 steamvr-openhmd-git
-
+vrc-get
 
 # Graphify: required runtime language packages also published for clients.
 python-tree-sitter
