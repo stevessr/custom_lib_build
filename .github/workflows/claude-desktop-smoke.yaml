@@ -1,0 +1,32 @@
+# Focused, non-publishing integration test for the two patched Claude packages.
+# Separate concurrency group avoids waiting for unrelated long smoke builds.
+name: Build Claude Desktop patches (non-publishing)
+
+on:
+  pull_request:
+    paths:
+      - 'custom-pkgs/claude-desktop-*/**'
+      - 'scripts/claude-*'
+      - '.github/workflows/claude-desktop-smoke.yaml'
+      - '.github/workflows/build-package.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: claude-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  claude-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - claude-desktop-http-patch
+          - claude-desktop-full-patch
+    uses: ./.github/workflows/build-package.yaml
+    with:
+      package: ${{ matrix.package }}
