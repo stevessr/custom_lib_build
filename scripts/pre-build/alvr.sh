@@ -19,6 +19,11 @@ eval "$(declare -f prepare | sed '1s/^prepare[[:space:]]*()/_arch_lib_alvr_origi
 prepare() {
     _arch_lib_alvr_original_prepare || return 1
     bash "$GITHUB_WORKSPACE/scripts/patch-alvr-libspa.sh" "$srcdir/alvr"
+    if [ ! -f "$srcdir/alvr/Cargo.lock" ]; then
+        echo "ALVR source has no Cargo.lock to update openssl-sys" >&2
+        return 1
+    fi
+    cargo update --manifest-path "$srcdir/alvr/Cargo.toml" -p openssl-sys --precise 0.9.114
 }
 # END arch_lib ALVR PipeWire compatibility
 PKGBUILD_PATCH
