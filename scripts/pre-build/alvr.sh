@@ -24,6 +24,7 @@ prepare() {
         return 1
     fi
     cargo update --manifest-path "$srcdir/alvr/Cargo.toml" -p openssl-sys --precise 0.9.114
+    cargo fetch --locked --manifest-path "$srcdir/alvr/Cargo.toml"
 }
 # END arch_lib ALVR PipeWire compatibility
 PKGBUILD_PATCH
