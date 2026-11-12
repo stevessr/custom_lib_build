@@ -329,6 +329,27 @@ jobs:
 
             # Compare untouched package names, filenames, and embedded signatures;
             # old versions of selected packages are allowed to disappear.
+            # Each GitHub Actions run: block is a separate shell, so define the
+            # database snapshot helper in this step as well.
+            snapshot_repo_signatures() {
+              local db_file="$1" output_file="$2" temp_dir
+              temp_dir=$(mktemp -d)
+              if ! bsdtar -xf "$db_file" -C "$temp_dir"; then
+                rm -rf "$temp_dir"
+                return 1
+              fi
+              : > "$output_file"
+              while IFS= read -r -d "" desc_file; do
+                awk '
+                  /^%NAME%$/ { getline; package_name=$0 }
+                  /^%FILENAME%$/ { getline; filename=$0 }
+                  /^%PGPSIG%$/ { getline; signature=$0 }
+                  END { if (package_name != "") printf "%s\t%s\t%s\n", package_name, filename, signature }
+                ' "$desc_file" >> "$output_file"
+              done < <(find "$temp_dir" -type f -name desc -print0)
+              rm -rf "$temp_dir"
+              sort -o "$output_file" "$output_file"
+            }
             snapshot_repo_signatures arch_lib.db.tar.gz \
               "$GITHUB_WORKSPACE/.current_repo_signatures.tsv"
             : > "$GITHUB_WORKSPACE/.updated_package_names"
