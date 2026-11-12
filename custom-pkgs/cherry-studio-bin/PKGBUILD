@@ -3,17 +3,17 @@
 # CI zstd-19 下包体积 ~296 MB。
 # 上游: https://github.com/CherryHQ/cherry-studio
 # 下载: https://github.com/CherryHQ/cherry-studio/releases/download/v$pkgver/Cherry-Studio-$pkgver-${_rpm_arch}.rpm
-# RPM 由 electron-builder 产出，payload 为 cpio(xz)，使用 rpm2cpio 提取 cpio payload。
+# RPM 由 electron-builder 产出，payload 为 cpio(xz)，使用 rpm2archive 提取 RPM v6 payload。
 
 pkgname=cherry-studio-bin
 _pkgname=cherry-studio
 pkgver=2.2.0
-pkgrel=3
+pkgrel=4
 pkgdesc="🍒 Cherry Studio is a desktop client that supports for multiple LLM providers"
 arch=('x86_64' 'aarch64')
 url="https://github.com/cherryHQ/cherry-studio"
 license=('AGPL-3.0')
-makedepends=('rpmextract')
+makedepends=('rpm-tools')
 options=('!strip' '!debug')
 depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'libevdev' 'libxkbcommon-x11')
 conflicts=("$_pkgname")
@@ -40,7 +40,7 @@ sha256sums=("$_sha256sum"
 prepare() {
   cd "$srcdir"
   # RPM payload 是 cpio(xz)，先用 rpm2cpio 转换，再由 bsdtar 提取文件
-  rpm2cpio "${_pkgname}-${pkgver}.rpm" | bsdtar -x -f - \
+  rpm2archive "${_pkgname}-${pkgver}.rpm" | bsdtar -x -f - \
     -s "|^./opt/Cherry Studio|payload|" \
     "opt/Cherry Studio/*" "usr/share/icons/*"
 }
