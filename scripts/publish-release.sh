@@ -329,6 +329,19 @@ export -f upload_asset
 export TOKEN RELEASE_ID UPLOAD AUTH UPLOAD_LOG
 
 # ── 5. 逐包：版本变化的包强制重传全部新文件 + 清理旧文件 ───────────
+# 任何包的 manifest 声明的文件都属于本轮发布的有效资产，不能被另一个包
+# 当作"旧版本文件"删除。历史上 reuse 的前缀匹配会把别的包的文件写进
+# manifest（python-tree-sitter → python-tree-sitter-objc、wechat →
+# wechat-bin、android-sdk → android-sdk-build-tools），按旧 manifest 清理
+# 会误删刚上传或仍需保留的资产。
+declare -A ALL_NEW_FILES=()
+for mf in "$META_DIR"/manifest-*.txt; do
+    [ -f "$mf" ] || continue
+    while IFS= read -r pf; do
+        [ -n "$pf" ] && ALL_NEW_FILES["$pf"]=1
+    done < "$mf"
+done
+
 for mf in "$META_DIR"/manifest-*.txt; do
     [ -f "$mf" ] || continue
     pkg=$(basename "$mf" | sed 's/^manifest-//; s/\.txt$//')
@@ -401,6 +414,12 @@ for mf in "$META_DIR"/manifest-*.txt; do
             [ "$pf" = "$nf" ] && keep=1
         done
         [ "$keep" -eq 1 ] && continue
+        # 另一个包的 manifest 仍声明该文件（split 同族，或历史错误
+        # manifest）：不能删，否则会把仍需保留/刚上传的资产移除。
+        if [ -n "${ALL_NEW_FILES[$pf]:-}" ]; then
+            echo "  keep asset claimed by another package: $pf"
+            continue
+        fi
         delete_asset "$pf"
         delete_asset "$pf.sig"
     done

@@ -67,6 +67,10 @@ jobs:
         shell: bash
         run: bash scripts/tests/test-wine-gohryt-mold.sh
 
+      - name: Test release asset selection
+        shell: bash
+        run: bash scripts/tests/test-release-asset-selection.sh
+
       - name: Check safe Magpie partial publish settings
         shell: bash
         run: |

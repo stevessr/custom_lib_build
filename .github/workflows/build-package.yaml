@@ -216,19 +216,16 @@ jobs:
             page=$((page + 1))
           done
 
-          candidates=$(awk -v p="$package-" 'index($0,p)==1' "$asset_names" \
-            | grep '\.pkg\.tar\.zst$' | grep -v '\.sig$' | sort -V || true)
-          if [ -z "$candidates" ]; then
+          # 按 PKGBUILD 声明的 pkgname 精确匹配资产，不能用 "<pkg>-" 前缀：
+          # 包名可能是别的包名的前缀（python-tree-sitter 与
+          # python-tree-sitter-objc、python-conda 与 python-conda-* 等），
+          # 前缀匹配会下载到别的包的文件。
+          files=$(bash "$GITHUB_WORKSPACE/scripts/release-asset-selection.sh" \
+            "$package" "${{ needs.check-version.outputs.pkgname }}" "$asset_names")
+          if [ -z "$files" ]; then
             echo "No package assets for $package in latest"
             exit 1
           fi
-          maxver=$(printf '%s\n' "$candidates" \
-            | sed -E 's/-[^-]+-[^-]+\.pkg\.tar\.zst$//' \
-            | awk -F- '{print $NF}' | sort -V | tail -1)
-          esc=$(sed 's/[][\\/.^$*+?(){}|]/\\&/g' <<<"$maxver")
-          files=$(printf '%s\n' "$candidates" \
-            | grep -E -- "-${esc}-[^-]+-[^-]+\.pkg\.tar\.zst$" || true)
-          [ -n "$files" ] || { echo "No files for version $maxver"; exit 1; }
 
           mkdir -p "$repo_dir"
           : > "$manifest"
@@ -357,20 +354,14 @@ jobs:
             page=$((page + 1))
           done
 
-          candidates=$(awk -v p="$package-" 'index($0,p)==1' "$asset_names" \
-            | grep '\.pkg\.tar\.zst$' | grep -v '\.sig$' | sort -V || true)
-          if [ -z "$candidates" ]; then
+          # 与 build job 相同：按 pkgname 精确匹配（含 split 同族），
+          # 不能用前缀匹配，否则会把前缀相同的别的包当成同族。
+          files=$(bash "$GITHUB_WORKSPACE/scripts/release-asset-selection.sh" \
+            "$package" "${{ needs.check-version.outputs.pkgname }}" "$asset_names")
+          if [ -z "$files" ]; then
             echo "No package assets for $package in latest"
             exit 1
           fi
-          # 中断残留可能同时存在新旧两个版本的文件：只取最新版本
-          maxver=$(printf '%s\n' "$candidates" \
-            | sed -E 's/-[^-]+-[^-]+\.pkg\.tar\.zst$//' \
-            | awk -F- '{print $NF}' | sort -V | tail -1)
-          esc=$(sed 's/[][\\/.^$*+?(){}|]/\\&/g' <<<"$maxver")
-          files=$(printf '%s\n' "$candidates" \
-            | grep -E -- "-${esc}-[^-]+-[^-]+\.pkg\.tar\.zst$" || true)
-          [ -n "$files" ] || { echo "No files for version $maxver"; exit 1; }
 
           : > "$manifest"
           while IFS= read -r filename; do
