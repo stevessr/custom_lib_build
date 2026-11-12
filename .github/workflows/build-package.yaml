@@ -240,6 +240,14 @@ jobs:
               --continue-at - \
               -o "$partial" "$dl/$filename"
             mv -f "$partial" "$dest"
+            sig_dest="$dest.sig"
+            sig_partial="$sig_dest.part"
+            if curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+              -o "$sig_partial" "$dl/$filename.sig"; then
+              mv -f "$sig_partial" "$sig_dest"
+            else
+              rm -f "$sig_partial" "$sig_dest"
+            fi
             printf '%s\n' "$filename" >> "$manifest"
           done <<< "$files"
           rm -f "$asset_names"
@@ -283,6 +291,7 @@ jobs:
           done < "$manifest_file"
           for filename in "${package_files[@]}"; do
             cp "$repo_dir/$filename" "$artifact_dir/"
+            [ ! -f "$repo_dir/$filename.sig" ] || cp "$repo_dir/$filename.sig" "$artifact_dir/"
           done
           cp "$manifest_file" "$artifact_dir/"
           for vf in "$GITHUB_WORKSPACE"/version-*.txt; do
@@ -372,6 +381,14 @@ jobs:
               --continue-at - \
               -o "$partial" "$dl/$filename"
             mv -f "$partial" "$dest"
+            sig_dest="$dest.sig"
+            sig_partial="$sig_dest.part"
+            if curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+              -o "$sig_partial" "$dl/$filename.sig"; then
+              mv -f "$sig_partial" "$sig_dest"
+            else
+              rm -f "$sig_partial" "$sig_dest"
+            fi
             printf '%s\n' "$filename" >> "$manifest"
           done <<< "$files"
           rm -f "$asset_names"
@@ -414,6 +431,7 @@ jobs:
           printf '%s\n' "${package_files[@]}" > "$manifest_file"
           for filename in "${package_files[@]}"; do
             cp "$repo_dir/$filename" "$artifact_dir/"
+            [ ! -f "$repo_dir/$filename.sig" ] || cp "$repo_dir/$filename.sig" "$artifact_dir/"
           done
           cp "$manifest_file" "$artifact_dir/"
           # version 文件由上一个步骤写入（check-version 的当前版本 +

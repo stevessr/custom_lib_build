@@ -152,10 +152,36 @@ for vf in "$META_DIR"/version-*.txt; do
                     need_publish=1
                 fi
             fi
-            if [ -f "$REPO_DIR/$pf.sig" ] && [ -z "${ASSET_IDS[$pf.sig]:-}" ]; then
-                echo "  missing .sig asset: $pf.sig"
+            signature_file="$REPO_DIR/$pf.sig"
+            remote_signature_id="${ASSET_IDS[$pf.sig]:-}"
+            if [ -f "$signature_file" ]; then
+                if [ -z "$remote_signature_id" ]; then
+                    echo "  missing .sig asset: $pf.sig"
+                    need_publish=1
+                    MISSING_FILES["$pf.sig"]=1
+                else
+                    remote_sig_size="${ASSET_SIZE[$pf.sig]:--}"
+                    remote_sig_digest="${ASSET_DIGEST[$pf.sig]:--}"
+                    local_sig_size=$(stat -c '%s' "$signature_file")
+                    signature_differs=0
+                    if [ "$remote_sig_size" != "-" ] && [ "$local_sig_size" != "$remote_sig_size" ]; then
+                        signature_differs=1
+                    elif [[ "$remote_sig_digest" == sha256:* ]]; then
+                        local_sig_digest=$(sha256sum "$signature_file" | awk '{print $1}')
+                        [ "$remote_sig_digest" = "sha256:$local_sig_digest" ] || signature_differs=1
+                    else
+                        signature_differs=1
+                    fi
+                    if [ "$signature_differs" -eq 1 ]; then
+                        echo "  package signature differs from staged signature: $pf.sig — re-uploading pair"
+                        CHANGED_PKGS["$pkg"]=1
+                        need_publish=1
+                    fi
+                fi
+            elif [ -n "$remote_signature_id" ]; then
+                echo "  staged package has no signature but latest has $pf.sig — removing stale signature"
+                CHANGED_PKGS["$pkg"]=1
                 need_publish=1
-                MISSING_FILES["$pf.sig"]=1
             fi
         done < "$META_DIR/$mf_name"
     fi
@@ -180,11 +206,20 @@ if [ -n "${ASSET_IDS[arch_lib.db.tar.gz]:-}" ]; then
             # With pipefail enabled, bsdtar can return SIGPIPE when awk exits
             # after the first FILENAME field.  That status must not abort the
             # whole publish before the repair/upload phase starts.
-            fn=$(bsdtar -xOf "$db_tmp" "$entry" 2>/dev/null \
-                | awk '/^%FILENAME%$/{getline; print}' || true)
+            fields=$(bsdtar -xOf "$db_tmp" "$entry" 2>/dev/null | awk '
+                /^%FILENAME%$/ { getline; filename=$0 }
+                /^%PGPSIG%$/ { getline; signature=$0 }
+                END { printf "%s\t%s", filename, signature }
+            ' || true)
+            IFS=$'\t' read -r fn package_signature <<< "$fields"
             [ -n "$fn" ] || continue
-            if [ -z "${ASSET_IDS[$fn]:-}" ]; then
+            if [ -z "${ASSET_IDS[$fn]:-}" ] && [ ! -f "$REPO_DIR/$fn" ]; then
                 echo "  db references missing asset: $fn"
+                need_publish=1
+            fi
+            if [ -n "$package_signature" ] && \
+               [ -z "${ASSET_IDS[$fn.sig]:-}" ] && [ ! -f "$REPO_DIR/$fn.sig" ]; then
+                echo "  db references missing detached signature: $fn.sig"
                 need_publish=1
             fi
         done < <(bsdtar -tf "$db_tmp" 2>/dev/null | grep '/desc$' || true)
@@ -198,6 +233,29 @@ if [ "$need_publish" -eq 0 ]; then
     echo "== All package versions unchanged and assets complete — release untouched =="
     exit 0
 fi
+
+# Validate the database that this run is about to publish, not the previous
+# release database (a full rebuild must be able to repair stale old references).
+candidate_db="$REPO_DIR/arch_lib.db.tar.gz"
+[ -s "$candidate_db" ] || { echo "::error::No candidate repository database to publish" >&2; exit 1; }
+while IFS= read -r entry; do
+    fields=$(bsdtar -xOf "$candidate_db" "$entry" 2>/dev/null | awk '
+        /^%FILENAME%$/ { getline; filename=$0 }
+        /^%PGPSIG%$/ { getline; signature=$0 }
+        END { printf "%s\t%s", filename, signature }
+    ' || true)
+    IFS=$'\t' read -r filename package_signature <<< "$fields"
+    [ -n "$filename" ] || continue
+    if [ -z "${ASSET_IDS[$filename]:-}" ] && [ ! -f "$REPO_DIR/$filename" ]; then
+        echo "::error::Candidate database references unavailable package asset: $filename" >&2
+        exit 1
+    fi
+    if [ -n "$package_signature" ] && \
+       [ -z "${ASSET_IDS[$filename.sig]:-}" ] && [ ! -f "$REPO_DIR/$filename.sig" ]; then
+        echo "::error::Candidate database references unavailable package signature: $filename.sig" >&2
+        exit 1
+    fi
+done < <(bsdtar -tf "$candidate_db" 2>/dev/null | grep '/desc$' || true)
 
 # ── 4. 上传/删除辅助（先删同名再传 = 幂等）─────────────────────────
 delete_asset() { # <name>

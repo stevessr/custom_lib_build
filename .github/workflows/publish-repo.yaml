@@ -94,6 +94,50 @@ jobs:
           run-id: ${{ inputs.build-run-id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify preserved Claude assets (partial update)
+        if: ${{ inputs.allow-missing-required-claude }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUIRE_PACKAGE_SIGNATURES: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          download="https://github.com/$GITHUB_REPOSITORY/releases/download/latest"
+          release_json=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            -H "Authorization: Bearer $GH_TOKEN" "$api/releases/tags/latest")
+          assets_url=$(jq -r '.assets_url // empty' <<<"$release_json")
+          [ -n "$assets_url" ] || { echo "::error::Cannot inspect existing release assets"; exit 1; }
+          asset_names=$(mktemp)
+          trap 'rm -f "$asset_names"' EXIT
+          page=1
+          while :; do
+            chunk=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              -H "Authorization: Bearer $GH_TOKEN" "$assets_url?per_page=100&page=$page")
+            [ "$(jq 'length' <<<"$chunk")" -gt 0 ] || break
+            jq -r '.[].name' <<<"$chunk" >> "$asset_names"
+            page=$((page + 1))
+          done
+          for required in claude-desktop-http-patch claude-desktop-full-patch; do
+            manifest=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              "$download/manifest-$required.txt")
+            [ -n "$manifest" ] || { echo "::error::Missing preserved manifest for $required"; exit 1; }
+            found=0
+            while IFS= read -r filename; do
+              [[ "$filename" == *.pkg.tar.zst ]] || continue
+              found=1
+              grep -Fxq -- "$filename" "$asset_names" || {
+                echo "::error::Cannot bypass Claude gate: missing existing package $filename"; exit 1;
+              }
+              if [ "$REQUIRE_PACKAGE_SIGNATURES" = "true" ]; then
+                grep -Fxq -- "$filename.sig" "$asset_names" || {
+                  echo "::error::Cannot bypass Claude gate: missing existing signature $filename.sig"; exit 1;
+                }
+              fi
+            done <<< "$manifest"
+            [ "$found" -eq 1 ] || { echo "::error::Empty preserved manifest for $required"; exit 1; }
+          done
+          echo "Verified existing Claude package assets and required signatures before partial update"
+
       - name: Collect package artifacts
         run: |
           mkdir -p repos/x86_64 release-metadata
@@ -104,6 +148,9 @@ jobs:
             [ -d "$artifact_dir" ] || continue
             for package_file in "$artifact_dir"/*.pkg.tar.zst; do
               cp -f "$package_file" repos/x86_64/
+              if [ -f "$package_file.sig" ]; then
+                cp -f "$package_file.sig" repos/x86_64/
+              fi
               package_count=$((package_count + 1))
             done
             for metadata_file in \
@@ -169,7 +216,32 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$count" > "$GITHUB_WORKSPACE/.previous_repo_count"
-          echo "Partial update preserving $count package entries"
+
+          # Keep each untouched package's in-database detached signature field.
+          # repo-add may replace entries for selected package files, but every
+          # other filename and signature must survive the database rewrite.
+          snapshot_repo_signatures() {
+            local db_file="$1" output_file="$2" temp_dir
+            temp_dir=$(mktemp -d)
+            if ! bsdtar -xf "$db_file" -C "$temp_dir"; then
+              rm -rf "$temp_dir"
+              return 1
+            fi
+            : > "$output_file"
+            while IFS= read -r -d '' desc_file; do
+              awk '
+                /^%NAME%$/ { getline; package_name=$0 }
+                /^%FILENAME%$/ { getline; filename=$0 }
+                /^%PGPSIG%$/ { getline; signature=$0 }
+                END { if (package_name != "") printf "%s\t%s\t%s\n", package_name, filename, signature }
+              ' "$desc_file" >> "$output_file"
+            done < <(find "$temp_dir" -type f -name desc -print0)
+            rm -rf "$temp_dir"
+            sort -o "$output_file" "$output_file"
+          }
+          snapshot_repo_signatures arch_lib.db.tar.gz \
+            "$GITHUB_WORKSPACE/.previous_repo_signatures.tsv"
+          echo "Partial update preserving $count database entries and their signature fields"
 
       # ── Validate archives before indexing or upload ─────────────────
       - name: Validate package archives
@@ -209,6 +281,9 @@ jobs:
           if [ -n "${KEY_ID:-}" ]; then
             for f in *.pkg.tar.zst; do
               [ -f "$f" ] || continue
+              # Reused artifacts carry the exact release signature. Only sign
+              # newly built packages which do not already have that sidecar.
+              [ -f "$f.sig" ] && { echo "Keeping staged signature: $f.sig"; continue; }
               echo "Signing: $f"
               gpg --batch --yes --detach-sign --local-user "$KEY_ID" "$f"
             done
@@ -251,6 +326,39 @@ jobs:
               exit 1
             fi
             echo "Partial update kept $before existing entries; new count $after"
+
+            # Compare untouched package names, filenames, and embedded signatures;
+            # old versions of selected packages are allowed to disappear.
+            snapshot_repo_signatures arch_lib.db.tar.gz \
+              "$GITHUB_WORKSPACE/.current_repo_signatures.tsv"
+            : > "$GITHUB_WORKSPACE/.updated_package_names"
+            for package_file in ./*.pkg.tar.zst; do
+              [ -f "$package_file" ] || continue
+              pacman -Qip "$package_file" | awk -F': *' '$1 ~ /^Name[[:space:]]*$/ { print $2; exit }' \
+                >> "$GITHUB_WORKSPACE/.updated_package_names"
+            done
+            sort -u -o "$GITHUB_WORKSPACE/.updated_package_names" "$GITHUB_WORKSPACE/.updated_package_names"
+            awk -F '\t' '
+              FILENAME == ARGV[1] { updated[$1]=1; next }
+              FILENAME == ARGV[2] { if (!($1 in updated)) old[$1]=$2 "\t" $3; next }
+              FILENAME == ARGV[3] { if (!($1 in updated)) current[$1]=$2 "\t" $3; next }
+              END {
+                failed=0
+                for (name in old) {
+                  if (!(name in current)) {
+                    printf "::error::Partial update dropped untouched package %s\n", name
+                    failed=1
+                  } else if (old[name] != current[name]) {
+                    printf "::error::Partial update changed filename or package signature for untouched package %s\n", name
+                    failed=1
+                  }
+                }
+                if (!failed) print "Verified all untouched package filenames and signature fields are unchanged"
+                exit failed
+              }
+            ' "$GITHUB_WORKSPACE/.updated_package_names" \
+              "$GITHUB_WORKSPACE/.previous_repo_signatures.tsv" \
+              "$GITHUB_WORKSPACE/.current_repo_signatures.tsv"
           fi
 
           # Real copies (not symlinks) — GitHub Release assets are flat,

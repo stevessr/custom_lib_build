@@ -25,6 +25,12 @@ on:
   schedule:
     - cron: '0 0 * * *'
   workflow_dispatch:
+    inputs:
+      packages:
+        description: '只更新指定包，逗号/空格分隔；留空则运行完整构建'
+        required: false
+        type: string
+        default: ''
   # Optional signed upstream webhook relay; payload never controls checkout.
   repository_dispatch:
     types: [openuuyc-update]
@@ -42,13 +48,60 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.gen-matrix.outputs.matrix }}
+      targeted: ${{ steps.gen-matrix.outputs.targeted }}
+      claude_selected: ${{ steps.gen-matrix.outputs.claude_selected }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Generate matrix from packages.txt
         id: gen-matrix
+        env:
+          REQUESTED_PACKAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.packages || '' }}
         run: |
           mapfile -t pkgs < <(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' packages.txt | grep -v '^$')
+
+          # A non-empty manual selection is intentionally a partial publication.
+          # Resolve package names against packages.txt before any build can start.
+          targeted=0
+          claude_selected=0
+          declare -A requested_pkg=()
+          declare -A package_exists=()
+          for pkg in "${pkgs[@]}"; do package_exists["$pkg"]=1; done
+          selected_input="${REQUESTED_PACKAGES//$'\r'/ }"
+          selected_input="${selected_input//$'\n'/ }"
+          selected_input="${selected_input//$'\t'/ }"
+          selected_input="${selected_input//,/ }"
+          if [[ -n "$REQUESTED_PACKAGES" && -z "${selected_input//[[:space:]]/}" ]]; then
+            echo "::error::Package selection contains no package names" >&2
+            exit 1
+          fi
+          if [[ -n "${selected_input//[[:space:]]/}" ]]; then
+            read -r -a requested <<< "$selected_input"
+            for pkg in "${requested[@]}"; do
+              [ -n "$pkg" ] || continue
+              if [[ -z "${package_exists[$pkg]:-}" ]]; then
+                echo "::error::Unknown package '$pkg' (not present in packages.txt)" >&2
+                exit 1
+              fi
+              requested_pkg["$pkg"]=1
+            done
+            if [[ ${#requested_pkg[@]} -eq 0 ]]; then
+              echo "::error::No package names supplied in selection" >&2
+              exit 1
+            fi
+            claude_http=${requested_pkg["claude-desktop-http-patch"]:-0}
+            claude_full=${requested_pkg["claude-desktop-full-patch"]:-0}
+            if [ "$claude_http" = 1 ] || [ "$claude_full" = 1 ]; then
+              claude_selected=1
+            fi
+            if { [ "$claude_http" = 1 ] || [ "$claude_full" = 1 ]; } && \
+               { [ "$claude_http" != 1 ] || [ "$claude_full" != 1 ]; }; then
+              echo "::error::Select both Claude desktop patch packages together, or select neither" >&2
+              exit 1
+            fi
+            targeted=1
+            echo "Targeted package update: ${!requested_pkg[*]}"
+          fi
 
           # 解析 AUR PackageBase：split 包（rustrover / rustrover-jre）共享
           # 同一 PKGBUILD，一次 makepkg 产出全部子包。矩阵只保留每个 base
@@ -69,23 +122,47 @@ jobs:
             [ -n "$name" ] && base_of["$name"]="$base"
           done < /tmp/aur-bases.txt
 
+          declare -A selected_base=()
+          declare -A selected_custom=()
+          if [ "$targeted" -eq 1 ]; then
+            for pkg in "${!requested_pkg[@]}"; do
+              if [ -f "custom-pkgs/$pkg/PKGBUILD" ]; then
+                selected_custom["$pkg"]=1
+              else
+                if [ -z "${base_of[$pkg]:-}" ]; then
+                  echo "::error::Cannot resolve selected AUR PackageBase for '$pkg'; refusing an ambiguous partial update" >&2
+                  exit 1
+                fi
+                selected_base["${base_of[$pkg]}"]=1
+              fi
+            done
+          fi
+
           declare -A seen_base=()
           kept=()
           for pkg in "${pkgs[@]}"; do
             # 自定义配方优先于 AUR，不参与 AUR PackageBase 去重
             if [ -f "custom-pkgs/$pkg/PKGBUILD" ]; then
+              if [ "$targeted" -eq 1 ] && [ -z "${selected_custom[$pkg]:-}" ]; then
+                continue
+              fi
               kept+=("$pkg")
               continue
             fi
-            base="${base_of[$pkg]:-}"
-            if [ -n "$base" ] && [ -n "${seen_base[$base]:-}" ]; then
+            base="${base_of[$pkg]:-$pkg}"
+            if [ "$targeted" -eq 1 ] && [ -z "${selected_base[$base]:-}" ]; then
+              continue
+            fi
+            if [ -n "${seen_base[$base]:-}" ]; then
               echo "  dedup: $pkg (same PackageBase $base — covered by sibling)"
               continue
             fi
-            [ -n "$base" ] && seen_base["$base"]=1
+            seen_base["$base"]=1
             kept+=("$pkg")
           done
 
+          echo "targeted=$([ "$targeted" -eq 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "claude_selected=$([ "$claude_selected" -eq 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           if [ "${#kept[@]}" -eq 0 ]; then
             echo "matrix=[]" >> "$GITHUB_OUTPUT"
             exit 0
@@ -114,8 +191,12 @@ jobs:
     if: ${{ always() && !cancelled() && needs.prepare.result == 'success' }}
     uses: ./.github/workflows/publish-repo.yaml
     with:
-      # Preserve previous packages when part of the matrix fails.
-      partial-update: ${{ needs.build.result != 'success' }}
+      # Manual selections deliberately update only the selected package bases.
+      # Restore the existing signed database and preserve all untouched assets.
+      partial-update: ${{ needs.prepare.outputs.targeted == 'true' || needs.build.result != 'success' }}
+      # The existing Claude entries stay in the restored database during an
+      # explicitly selected successful update; never bypass this gate on failure.
+      allow-missing-required-claude: ${{ needs.prepare.outputs.targeted == 'true' && needs.prepare.outputs.claude_selected != 'true' && needs.build.result == 'success' }}
     secrets: inherit
 
   # ── Deploy to S3（可选，配置 S3_* secrets 后自动启用）──────────────
