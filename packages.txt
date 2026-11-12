@@ -165,6 +165,7 @@ intel-level-zero-raytracing-support
 # UU
 uuyc-wine
 wine-gohryt-wayland-wow64
+wine-tkg-staging-wow64-bin
 # 原生 Linux 客户端：从 stevessr/openuuyc-linux 的 linux-port 分支构建
 openuuyc-git
 
