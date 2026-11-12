@@ -63,6 +63,10 @@ jobs:
         shell: bash
         run: bash scripts/tests/test-tree-sitter-grammar.sh
 
+      - name: Test wine-gohryt mold bootstrap
+        shell: bash
+        run: bash scripts/tests/test-wine-gohryt-mold.sh
+
       - name: Check safe Magpie partial publish settings
         shell: bash
         run: |
