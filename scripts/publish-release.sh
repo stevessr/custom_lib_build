@@ -203,23 +203,39 @@ fi
 delete_asset() { # <name>
     local name="$1"
     if [ -n "${ASSET_IDS[$name]:-}" ]; then
-        # Retry on 5xx/429 (GitHub rate limit / transient errors), like upload does
-        # --retry-all-errors retries on 5xx, 429, and connection failures
-        # Treat 404 as success (asset already gone = idempotent)
-        local http_code
-        http_code=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
-            -X DELETE -H "$AUTH" "$API/releases/assets/${ASSET_IDS[$name]}" \
-            -o /dev/null -w '%{http_code}')
-        case "$http_code" in
-            204|404)
-                echo "  deleted: $name"
-                unset 'ASSET_IDS[$name]'
-                ;;
-            *)
-                echo "  ✗ delete failed (HTTP $http_code) after retries: $name" >&2
-                return 1
-                ;;
-        esac
+        # Retry transient HTTP/network errors, but inspect status codes ourselves:
+        # curl --fail exits on 404 before the idempotent-success case can handle it.
+        local http_code attempt=1
+        while [ "$attempt" -le 6 ]; do
+            if http_code=$(curl -sSL --max-time 60 \
+                -X DELETE -H "$AUTH" "$API/releases/assets/${ASSET_IDS[$name]}" \
+                -o /dev/null -w '%{http_code}'); then
+                :
+            else
+                http_code=000
+            fi
+            case "$http_code" in
+                204|404)
+                    echo "  deleted: $name"
+                    unset 'ASSET_IDS[$name]'
+                    return 0
+                    ;;
+                429|5??|000)
+                    if [ "$attempt" -lt 6 ]; then
+                        echo "  transient delete failure (HTTP $http_code), retry $attempt/5: $name" >&2
+                        sleep 3
+                        attempt=$((attempt + 1))
+                    else
+                        echo "  ✗ delete failed (HTTP $http_code) after retries: $name" >&2
+                        return 1
+                    fi
+                    ;;
+                *)
+                    echo "  ✗ delete failed (HTTP $http_code): $name" >&2
+                    return 1
+                    ;;
+            esac
+        done
     fi
 }
 
