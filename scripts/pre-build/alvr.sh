@@ -23,7 +23,8 @@ prepare() {
         echo "ALVR source has no Cargo.lock to update openssl-sys" >&2
         return 1
     fi
-    cargo update --manifest-path "$srcdir/alvr/Cargo.toml" -p openssl-sys --precise 0.9.114
+    cargo update --manifest-path "$srcdir/alvr/Cargo.toml" -p openssl --precise 0.10.82
+    cargo update --manifest-path "$srcdir/alvr/Cargo.toml" -p openssl-sys --precise 0.9.118
     cargo fetch --locked --manifest-path "$srcdir/alvr/Cargo.toml"
 }
 # END arch_lib ALVR PipeWire compatibility
