@@ -231,3 +231,9 @@ python-tree-sitter-json
 
 # grep
 graphify
+
+# tradional pkg
+kgamma
+kwin-x11
+wacomtablet
+
