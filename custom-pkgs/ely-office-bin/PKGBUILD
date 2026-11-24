@@ -1,5 +1,5 @@
 # Maintained in arch_lib: repack ElyOffice's official Arch binaries as one suite.
-# Upstream currently publishes one Arch package per app rather than a suite package.
+# Prefer the unified upstream Arch package (v0.1.17+), with legacy split support.
 pkgname=ely-office-bin
 _pkgname=ElyOffice
 pkgver=0.1.12
@@ -13,8 +13,8 @@ depends=('glibc' 'libgcc' 'libstdc++' 'krb5' 'e2fsprogs' 'libxcb' 'libx11'
          'fontconfig' 'freetype2' 'fribidi' 'mesa' 'gmp' 'harfbuzz'
          'libgpg-error' 'util-linux-libs')
 makedepends=('curl' 'jq' 'libarchive')
-provides=('ely-office')
-conflicts=('ely-doc' 'ely-mail' 'ely-mark' 'ely-pdf' 'ely-show' 'ely-table' 'ely-tree')
+provides=('ely-office' 'ely-doc' 'ely-mail' 'ely-mark' 'ely-pdf' 'ely-show' 'ely-table' 'ely-tree')
+conflicts=('ely-office' 'ely-doc' 'ely-mail' 'ely-mark' 'ely-pdf' 'ely-show' 'ely-table' 'ely-tree')
 options=('!strip')
 source=()
 sha256sums=()
@@ -25,6 +25,7 @@ prepare() {
   cd "$srcdir"
 
   local release_json tag version slug asset_name asset_api digest
+  local -a asset_names=()
   release_json="$(mktemp)"
   trap 'rm -f "$release_json"' RETURN
 
@@ -41,8 +42,17 @@ prepare() {
     return 1
   fi
 
-  for slug in "${_apps[@]}"; do
-    asset_name="ely-${slug}-${version}-1-x86_64.pkg.tar.zst"
+  asset_name="ely-office-${version}-1-x86_64.pkg.tar.zst"
+  if jq -e --arg n "$asset_name" '.assets[]? | select(.name == $n and .state == "uploaded")' "$release_json" >/dev/null; then
+    asset_names+=("$asset_name")
+  else
+    for slug in "${_apps[@]}"; do
+      asset_names+=("ely-${slug}-${version}-1-x86_64.pkg.tar.zst")
+    done
+  fi
+
+  rm -f .ely-office-assets .ely-office-version
+  for asset_name in "${asset_names[@]}"; do
     asset_api="$(jq -r --arg n "$asset_name" \
       '.assets[]? | select(.name == $n and .state == "uploaded") | .url' \
       "$release_json" | head -n1)"
@@ -64,9 +74,10 @@ prepare() {
       -H 'Accept: application/octet-stream' \
       -H 'X-GitHub-Api-Version: 2026-03-10' \
       "$asset_api" -o "$asset_name"
-    printf '%s  %s\n' "${digest#sha256:}" "$asset_name" | sha256sum -c -
+    printf '%s  %s\n' "${digest#sha256:}" "$asset_name" | sha256sum -c - || return 1
   done
 
+  printf '%s\n' "${asset_names[@]}" > .ely-office-assets
   printf '%s\n' "$version" > .ely-office-version
 }
 
@@ -75,10 +86,10 @@ pkgver() {
 }
 
 package() {
-  local slug asset_name
-  for slug in "${_apps[@]}"; do
-    asset_name="ely-${slug}-${pkgver}-1-x86_64.pkg.tar.zst"
+  local asset_name
+  test -s "$srcdir/.ely-office-assets" || return 1
+  while IFS= read -r asset_name; do
     bsdtar -xf "$srcdir/$asset_name" -C "$pkgdir" \
-      --exclude=.PKGINFO --exclude=.BUILDINFO --exclude=.MTREE --exclude=.INSTALL
-  done
+      --exclude=.PKGINFO --exclude=.BUILDINFO --exclude=.MTREE --exclude=.INSTALL || return 1
+  done < "$srcdir/.ely-office-assets"
 }

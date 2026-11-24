@@ -10,7 +10,7 @@ if grep -q '^# BEGIN arch_lib ALVR PipeWire compatibility$' "$recipe"; then exit
 cat >> "$recipe" <<'PKGBUILD_PATCH'
 
 # BEGIN arch_lib ALVR PipeWire compatibility
-pkgrel=$((pkgrel + 1))
+pkgrel=$((pkgrel + 2))
 if ! declare -f prepare >/dev/null; then
     echo "ALVR recipe has no prepare() hook" >&2
     exit 1
@@ -18,13 +18,14 @@ fi
 eval "$(declare -f prepare | sed '1s/^prepare[[:space:]]*()/_arch_lib_alvr_original_prepare ()/')"
 prepare() {
     _arch_lib_alvr_original_prepare || return 1
-    bash "$GITHUB_WORKSPACE/scripts/patch-alvr-libspa.sh" "$srcdir/alvr"
+    bash "$GITHUB_WORKSPACE/scripts/patch-alvr-libspa.sh" "$srcdir/alvr" || return 1
     if [ ! -f "$srcdir/alvr/Cargo.lock" ]; then
         echo "ALVR source has no Cargo.lock to update openssl-sys" >&2
         return 1
     fi
     cargo update --manifest-path "$srcdir/alvr/Cargo.toml" -p openssl --precise 0.10.82
     cargo update --manifest-path "$srcdir/alvr/Cargo.toml" -p openssl-sys --precise 0.9.118
+    bash "$GITHUB_WORKSPACE/scripts/patch-alvr-ashpd.sh" "$srcdir/alvr" || return 1
     cargo fetch --locked --manifest-path "$srcdir/alvr/Cargo.toml"
 }
 # END arch_lib ALVR PipeWire compatibility

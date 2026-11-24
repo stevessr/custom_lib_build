@@ -1,10 +1,10 @@
-# 由 arch_lib 维护: vladelaina/BongoCat 官方预构建 tar.gz（C×SDL3×OpenGL 原生运行时）
+# 由 arch_lib 维护: vladelaina/BongoCat 官方预构建 ZIP / tar.gz（C×SDL3×OpenGL 原生运行时）
 # AUR 上无对应包（aur bongo-cat 是 ayangweb/BongoCat Tauri fork），故走 custom-pkgs
 # 来源: https://github.com/vladelaina/BongoCat
 #
 # 不直接拼 releases/download URL：GitHub Release 资产刚发布时 CDN/重定向
 # 偶发返回 404。这里通过 Releases API 定位 latest 中实际存在的
-# linux-x64 tar.gz，再从 asset API 下载，并使用 API 返回的 sha256 digest 校验。
+# linux-x64 ZIP / tar.gz，再从 asset API 下载，并使用 API 返回的 sha256 digest 校验。
 
 pkgname=bongocat-bin
 _pkgname=BongoCat
@@ -15,7 +15,7 @@ arch=('x86_64')
 url="https://github.com/vladelaina/BongoCat"
 license=('LicenseRef-BongoCat' 'LicenseRef-MIT')
 depends=('libglvnd' 'curl' 'libx11' 'libxi' 'libxfixes')
-makedepends=('jq')
+makedepends=('jq' 'libarchive')
 conflicts=()
 options=('!strip')
 source=()
@@ -40,7 +40,11 @@ prepare() {
     return 1
   fi
 
-  asset_name="BongoCat-${latest}-linux-x64.tar.gz"
+  for asset_name in "BongoCat-${latest}-linux-x64.zip" "BongoCat-${latest}-linux-x64.tar.gz"; do
+    if jq -e --arg n "$asset_name" '.assets[]? | select(.name == $n and .state == "uploaded" and (.digest // "" | test("^sha256:[0-9a-fA-F]{64}$")))' "$release_json" >/dev/null; then
+      break
+    fi
+  done
   asset_api="$(jq -r --arg n "$asset_name" \
     '.assets[]? | select(.name == $n and .state == "uploaded") | .url' \
     "$release_json" | head -n1)"
@@ -57,7 +61,6 @@ prepare() {
     return 1
   fi
 
-  printf '%s\n' "$latest" > .bongocat-version
   echo "Downloading GitHub release asset: $asset_name"
 
   # GitHub documents application/octet-stream on the asset API as the binary
@@ -67,8 +70,14 @@ prepare() {
     -H 'X-GitHub-Api-Version: 2026-03-10' \
     "$asset_api" -o "$asset_name"
 
-  printf '%s  %s\n' "${digest#sha256:}" "$asset_name" | sha256sum -c -
-  tar -xzf "$asset_name"
+  printf '%s  %s\n' "${digest#sha256:}" "$asset_name" | sha256sum -c - || return 1
+  rm -rf "BongoCat-${latest}-linux-x64"
+  bsdtar -xf "$asset_name" || return 1
+  test -f "BongoCat-${latest}-linux-x64/BongoCat" || {
+    echo "Unexpected BongoCat archive layout: $asset_name" >&2
+    return 1
+  }
+  printf '%s\n' "$latest" > .bongocat-version
   rm -f "$asset_name"
 }
 
@@ -84,7 +93,17 @@ package() {
   cd "$srcdir/BongoCat-${resolved_ver}-linux-x64"
 
   install -d "$pkgdir/usr/lib/bongocat-bin"
-  cp -a BongoCat assets "$pkgdir/usr/lib/bongocat-bin/"
+  install -m755 BongoCat "$pkgdir/usr/lib/bongocat-bin/BongoCat"
+  if [[ -d assets ]]; then
+    cp -a assets "$pkgdir/usr/lib/bongocat-bin/"
+  fi
+  if [[ -d share ]]; then
+    install -d "$pkgdir/usr/share"
+    cp -a share/. "$pkgdir/usr/share/"
+    if [[ -f "$pkgdir/usr/share/applications/bongo-cat.desktop" ]]; then
+      sed -i 's/^Exec=BongoCat$/Exec=bongocat/' "$pkgdir/usr/share/applications/bongo-cat.desktop"
+    fi
+  fi
 
   # assets/ 相对路径按运行时约定解析（与可执行文件同目录）。
   install -d "$pkgdir/usr/bin"
