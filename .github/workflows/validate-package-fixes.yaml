@@ -8,6 +8,12 @@ on:
       - 'scripts/**'
       - 'custom-pkgs/**'
       - '.github/workflows/**'
+  push:
+    branches: [master]
+    paths:
+      - 'custom-pkgs/bongocat-bin/**'
+      - 'scripts/tests/test-bongocat-layout.sh'
+      - '.github/workflows/validate-package-fixes.yaml'
   workflow_dispatch:
 
 permissions:
@@ -70,6 +76,10 @@ jobs:
       - name: Test release asset selection
         shell: bash
         run: bash scripts/tests/test-release-asset-selection.sh
+
+      - name: Test BongoCat archive layout and packaging
+        shell: bash
+        run: bash scripts/tests/test-bongocat-layout.sh
 
       - name: Check safe Magpie partial publish settings
         shell: bash

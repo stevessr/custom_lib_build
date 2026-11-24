@@ -9,20 +9,58 @@
 pkgname=bongocat-bin
 _pkgname=BongoCat
 pkgver=1.11.0
-pkgrel=1
+pkgrel=2
 pkgdesc="跨平台互动桌宠 BongoCat（C × SDL3 × OpenGL 原生版，官方预构建）"
 arch=('x86_64')
 url="https://github.com/vladelaina/BongoCat"
 license=('LicenseRef-BongoCat' 'LicenseRef-MIT')
 depends=('libglvnd' 'curl' 'libx11' 'libxi' 'libxfixes')
-makedepends=('jq' 'libarchive')
+makedepends=('jq' 'unzip')
 conflicts=()
 options=('!strip')
 source=()
 sha256sums=()
 
+# Layout-independent extraction of the official Linux archive.
+_bongocat_unpack() {
+  local archive="$1" stage="$2" candidate name runtime binary relative
+  local -a matches=()
+  rm -rf -- "$stage" || return 1
+  mkdir -p "$stage" || return 1
+  case "$archive" in
+    *.zip) unzip -q "$archive" -d "$stage" || return 1 ;;
+    *.tar.gz) tar -xzf "$archive" -C "$stage" || return 1 ;;
+    *) return 1 ;;
+  esac
+  while IFS= read -r -d '' candidate; do
+    name="${candidate##*/}"
+    case "${name,,}" in
+      bongocat|bongo-cat|bongo_cat|bongocat.bin|bongocat.x86_64|bongocat-linux-x64|bongocat-*-linux-x64) ;;
+      *) continue ;;
+    esac
+    # Do not select a Windows executable, document or similarly named asset.
+    [[ $(od -An -tx1 -N6 "$candidate" | tr -d ' \n') == 7f454c460201 ]] || continue
+    [[ $(od -An -tx1 -j18 -N2 "$candidate" | tr -d ' \n') == 3e00 ]] || continue
+    matches+=("$candidate")
+  done < <(find "$stage" -type f -print0)
+  if (( ${#matches[@]} != 1 )); then
+    printf 'Expected one BongoCat Linux x86_64 executable, found %s in %s\n' "${#matches[@]}" "$archive" >&2
+    find "$stage" -maxdepth 3 -printf '%P\n' >&2
+    return 1
+  fi
+  binary="${matches[0]}"
+  runtime="${binary%/*}"
+  if [[ ${runtime##*/} == bin && "$runtime" != "$stage" ]]; then
+    runtime="${runtime%/*}"
+  fi
+  relative="${binary#"$runtime/"}"
+  printf '%s\n' "$runtime" > "$stage/.runtime-root" || return 1
+  printf '%s\n' "$relative" > "$stage/.runtime-binary" || return 1
+}
+
 prepare() {
-  cd "$srcdir"
+  cd "$srcdir" || return 1
+  rm -f .bongocat-version
 
   local release_json latest asset_name asset_api digest
   release_json="$(mktemp)"
@@ -32,7 +70,7 @@ prepare() {
     -H 'Accept: application/vnd.github+json' \
     -H 'X-GitHub-Api-Version: 2026-03-10' \
     'https://api.github.com/repos/vladelaina/BongoCat/releases/latest' \
-    -o "$release_json"
+    -o "$release_json" || return 1
 
   latest="$(jq -r '.tag_name // empty | sub("^v"; "")' "$release_json")"
   if [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -68,15 +106,10 @@ prepare() {
   curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
     -H 'Accept: application/octet-stream' \
     -H 'X-GitHub-Api-Version: 2026-03-10' \
-    "$asset_api" -o "$asset_name"
+    "$asset_api" -o "$asset_name" || return 1
 
   printf '%s  %s\n' "${digest#sha256:}" "$asset_name" | sha256sum -c - || return 1
-  rm -rf "BongoCat-${latest}-linux-x64"
-  bsdtar -xf "$asset_name" || return 1
-  test -f "BongoCat-${latest}-linux-x64/BongoCat" || {
-    echo "Unexpected BongoCat archive layout: $asset_name" >&2
-    return 1
-  }
+  _bongocat_unpack "$srcdir/$asset_name" "$srcdir/.bongocat-extracted" || return 1
   printf '%s\n' "$latest" > .bongocat-version
   rm -f "$asset_name"
 }
@@ -88,28 +121,21 @@ pkgver() {
 }
 
 package() {
-  local resolved_ver
-  resolved_ver="$(cat "$srcdir/.bongocat-version")"
-  cd "$srcdir/BongoCat-${resolved_ver}-linux-x64"
-
-  install -d "$pkgdir/usr/lib/bongocat-bin"
-  install -m755 BongoCat "$pkgdir/usr/lib/bongocat-bin/BongoCat"
-  if [[ -d assets ]]; then
-    cp -a assets "$pkgdir/usr/lib/bongocat-bin/"
-  fi
-  if [[ -d share ]]; then
-    install -d "$pkgdir/usr/share"
-    cp -a share/. "$pkgdir/usr/share/"
+  local stage="$srcdir/.bongocat-extracted" runtime relative target
+  runtime=$(cat "$stage/.runtime-root") || return 1
+  relative=$(cat "$stage/.runtime-binary") || return 1
+  target="$pkgdir/usr/lib/bongocat-bin"
+  install -d "$target" "$pkgdir/usr/bin" || return 1
+  cp -a "$runtime/." "$target/" || return 1
+  rm -f "$target/.runtime-root" "$target/.runtime-binary"
+  chmod 755 "$target/$relative" || return 1
+  if [[ -d "$runtime/share" ]]; then
+    install -d "$pkgdir/usr/share" || return 1
+    cp -a "$runtime/share/." "$pkgdir/usr/share/" || return 1
     if [[ -f "$pkgdir/usr/share/applications/bongo-cat.desktop" ]]; then
-      sed -i 's/^Exec=BongoCat$/Exec=bongocat/' "$pkgdir/usr/share/applications/bongo-cat.desktop"
+      sed -i -E 's/^Exec=(BongoCat|bongo-cat|bongo_cat)([[:space:]]|$)/Exec=bongocat\2/I' "$pkgdir/usr/share/applications/bongo-cat.desktop"
     fi
   fi
-
-  # assets/ 相对路径按运行时约定解析（与可执行文件同目录）。
-  install -d "$pkgdir/usr/bin"
-  cat > "$pkgdir/usr/bin/bongocat" <<'WRAPPER'
-#!/bin/sh
-exec /usr/lib/bongocat-bin/BongoCat "$@"
-WRAPPER
-  chmod +x "$pkgdir/usr/bin/bongocat"
+  printf '#!/bin/sh\nexec /usr/lib/bongocat-bin/%s "$@"\n' "$relative" > "$pkgdir/usr/bin/bongocat" || return 1
+  chmod 755 "$pkgdir/usr/bin/bongocat"
 }
